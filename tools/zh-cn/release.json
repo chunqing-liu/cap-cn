@@ -1,0 +1,8 @@
+{
+	"version": "0.6.1-cn.2",
+	"numericVersion": "0.6.1.2",
+	"upstreamTag": "cap-v0.6.1",
+	"upstreamCommit": "cb12972577993e6051228a703af17e59564b9289",
+	"architecture": "x64",
+	"appId": "Cap.CN.Community.Trial.WindowsX64"
+}
