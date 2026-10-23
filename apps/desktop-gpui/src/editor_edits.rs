@@ -1841,6 +1841,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             })
             .collect(),
@@ -3476,6 +3477,31 @@ mod tests {
             (timeline.segments[2].start, timeline.segments[2].end),
             (0., 8.)
         );
+    }
+
+    #[test]
+    fn splitting_a_clip_copies_its_zoom_without_linking_the_halves() {
+        let mut config = two_clip_config();
+        let timeline = config.timeline.as_mut().unwrap();
+        timeline.segments[0].auto_zoom = Some(cap_project::DualDisplayAutoZoom {
+            amount: 1.1,
+            hold_seconds: 4.2,
+            ..Default::default()
+        });
+        assert!(split_clip_segment(timeline, 4.0, Some(0)));
+        assert_eq!(
+            timeline.segments[0].auto_zoom,
+            timeline.segments[1].auto_zoom
+        );
+        let right = timeline.segments[1].auto_zoom.as_mut().unwrap();
+        right.enabled = false;
+        right.amount = 2.5;
+        right.hold_seconds = 8.5;
+        let left = timeline.segments[0].auto_zoom.as_ref().unwrap();
+        assert!(left.enabled);
+        assert_eq!(left.amount, 1.1);
+        assert_eq!(left.hold_seconds, 4.2);
+        assert!(timeline.segments[2].auto_zoom.is_none());
     }
 
     #[test]

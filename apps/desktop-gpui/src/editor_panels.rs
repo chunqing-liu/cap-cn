@@ -2528,6 +2528,14 @@ pub enum PanelSlider {
 /// Window` and the sidebar's render chain is threaded with `&self`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FieldKey {
+    DualZoomDuration,
+    DualZoomAmount,
+    ClipZoomAmount(usize),
+    ClipZoomDuration(usize),
+    ZoomAmount(usize),
+    ZoomStart(usize),
+    ZoomEnd(usize),
+    TimelineJump,
     StyleName(usize),
     ImageName(usize),
     StyleCrop(usize, u8),
@@ -2628,6 +2636,25 @@ impl EditorWindow {
 
     /// What a field should read when it is not being typed into.
     fn field_value(&self, key: FieldKey) -> Option<String> {
+        if key == FieldKey::TimelineJump {
+            return Some(crate::editor_timeline::format_timecode(
+                self.playhead_time(),
+            ));
+        }
+        if key == FieldKey::DualZoomAmount {
+            return self
+                .project
+                .dual_display
+                .as_ref()
+                .map(|dual| ui::format_number(dual.zoom_amount_at(&[], 0.0)));
+        }
+        if key == FieldKey::DualZoomDuration {
+            return self
+                .project
+                .dual_display
+                .as_ref()
+                .map(|dual| ui::format_number(dual.auto_zoom.click_hold_seconds()));
+        }
         // The crop boxes read the open cropper, not the project: their value
         // is `crop()[props.field]`, i.e. `realBounds` (`Editor.tsx:1182`).
         if let FieldKey::Crop(field) = key {
@@ -2636,6 +2663,21 @@ impl EditorWindow {
         }
         let timeline = self.project.timeline.as_ref()?;
         Some(match key {
+            FieldKey::ClipZoomAmount(index) => {
+                ui::format_number(self.clip_auto_zoom(index)?.amount)
+            }
+            FieldKey::ClipZoomDuration(index) => {
+                ui::format_number(self.clip_auto_zoom(index)?.click_hold_seconds())
+            }
+            FieldKey::ZoomAmount(index) => {
+                ui::format_number(timeline.zoom_segments.get(index)?.amount)
+            }
+            FieldKey::ZoomStart(index) => {
+                crate::editor_timeline::format_timecode(timeline.zoom_segments.get(index)?.start)
+            }
+            FieldKey::ZoomEnd(index) => {
+                crate::editor_timeline::format_timecode(timeline.zoom_segments.get(index)?.end)
+            }
             FieldKey::StyleName(index) => timeline.style_segments.get(index)?.name.clone(),
             FieldKey::ImageName(index) => timeline.image_segments.get(index)?.name.clone(),
             FieldKey::StyleCrop(index, axis) => {
@@ -2715,6 +2757,15 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if key == FieldKey::TimelineJump {
+            if matches!(event, ui::TextInputEvent::Confirmed) {
+                self.commit_field(key, true, window, cx);
+                window.focus(&self.focus_handle_for_menu(), cx);
+            } else if matches!(event, ui::TextInputEvent::Cancelled) {
+                window.focus(&self.focus_handle_for_menu(), cx);
+            }
+            return;
+        }
         match event {
             ui::TextInputEvent::Changed => {
                 self.begin_field_edit(key);
@@ -2771,6 +2822,120 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            FieldKey::ClipZoomAmount(index) | FieldKey::ClipZoomDuration(index) => {
+                if !final_commit {
+                    return;
+                }
+                if let Some(value) = ui::parse_number(&text).filter(|value| value.is_finite()) {
+                    self.edit_clip_auto_zoom(index, window, cx, |zoom| {
+                        if matches!(key, FieldKey::ClipZoomAmount(_)) {
+                            zoom.amount = value.clamp(1.0, 4.5);
+                        } else {
+                            zoom.hold_seconds = value.clamp(0.1, 60.0);
+                        }
+                    });
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
+            FieldKey::TimelineJump => {
+                if let Some(time) = crate::editor_timeline::parse_time(&text) {
+                    self.seek_to_time(time.min(self.total_duration()), cx);
+                    self.center_timeline_on_playhead(cx);
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
+            FieldKey::DualZoomAmount => {
+                if !final_commit {
+                    return;
+                }
+                if let Some(value) = ui::parse_number(&text).filter(|value| value.is_finite()) {
+                    self.edit_project("dual-zoom-amount", window, cx, move |project| {
+                        let Some(dual) = project.dual_display.as_mut() else {
+                            return false;
+                        };
+                        let value = value.clamp(1.0, 4.5);
+                        if dual.auto_zoom.amount == value {
+                            return false;
+                        }
+                        dual.auto_zoom.amount = value;
+                        true
+                    });
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
+            FieldKey::ZoomAmount(index) | FieldKey::ZoomStart(index) | FieldKey::ZoomEnd(index) => {
+                if !final_commit {
+                    return;
+                }
+                let value = if matches!(key, FieldKey::ZoomAmount(_)) {
+                    ui::parse_number(&text).filter(|value| value.is_finite())
+                } else {
+                    crate::editor_timeline::parse_time(&text)
+                };
+                let total = self.total_duration();
+                if let Some(value) = value {
+                    self.edit_project("zoom-range-number", window, cx, move |project| {
+                        let Some(timeline) = project.timeline.as_mut() else {
+                            return false;
+                        };
+                        let previous_end = index
+                            .checked_sub(1)
+                            .and_then(|i| timeline.zoom_segments.get(i))
+                            .map_or(0.0, |segment| segment.end);
+                        let next_start = timeline
+                            .zoom_segments
+                            .get(index + 1)
+                            .map_or(total, |segment| segment.start);
+                        let Some(segment) = timeline.zoom_segments.get_mut(index) else {
+                            return false;
+                        };
+                        match key {
+                            FieldKey::ZoomAmount(_) => segment.amount = value.clamp(1.0, 4.5),
+                            FieldKey::ZoomStart(_) => {
+                                segment.start = value
+                                    .max(previous_end)
+                                    .min((segment.end - 0.05).max(previous_end));
+                            }
+                            _ => {
+                                segment.end = value
+                                    .min(next_start)
+                                    .max((segment.start + 0.05).min(next_start))
+                            }
+                        }
+                        true
+                    });
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
+            FieldKey::DualZoomDuration => {
+                if !final_commit {
+                    return;
+                }
+                if let Some(value) = ui::parse_number(&text) {
+                    self.edit_project("dual-zoom-duration", window, cx, move |project| {
+                        let Some(dual) = project.dual_display.as_mut() else {
+                            return false;
+                        };
+                        let value = value.clamp(0.1, 60.0);
+                        if dual.auto_zoom.hold_seconds == value {
+                            return false;
+                        }
+                        dual.auto_zoom.hold_seconds = value;
+                        true
+                    });
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
             FieldKey::StyleName(index) | FieldKey::ImageName(index) => {
                 let style = matches!(key, FieldKey::StyleName(_));
                 self.edit_project("segment-name", window, cx, move |project| {
@@ -3937,9 +4102,13 @@ impl EditorWindow {
                         .into_any_element()
                 }
             }
-            // A clip selection never reaches here -- `sidebarSelection()`
-            // filters it out.
-            TrackKind::Clip => div().into_any_element(),
+            TrackKind::Clip => self.stacked_panel(
+                "clip",
+                "视频片段",
+                count(timeline.segments.len()),
+                cx,
+                |this, index, cx| this.render_dual_clip_panel(index, cx),
+            ),
         };
 
         div()
@@ -4021,6 +4190,7 @@ impl EditorWindow {
     /// `ZoomSegmentConfig` (`:5577-5881`).
     fn render_zoom_panel(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        let dual = self.project.dual_display.is_some();
         let manual = self
             .timeline()
             .and_then(|timeline| timeline.zoom_segments.get(index))
@@ -4030,6 +4200,26 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(14.))
+            .children(dual.then(|| {
+                div()
+                .flex()
+                .flex_col()
+                .gap(px(14.))
+                .child(ui::Field::inline(&theme, "开始").value(
+                    self.render_number_field(FieldKey::ZoomStart(index), "", 136.),
+                ))
+                .child(ui::Field::inline(&theme, "结束").value(
+                    self.render_number_field(FieldKey::ZoomEnd(index), "", 136.),
+                ))
+                .child(ui::Field::inline(&theme, "倍率").value(
+                    self.render_number_field(FieldKey::ZoomAmount(index), "×", 88.),
+                ))
+                .child(
+                    div().text_size(px(11.)).text_color(theme.gray_11)
+                        .child("支持 1.00–4.50×。任何缩放都只作用于录像中鼠标所在的显示器，另一屏保持不变。轨道优先于片段自动缩放；手动焦点使用当前显示器内的相对位置。"),
+                )
+                .into_any_element()
+            }))
             .child(self.slider_field(
                 SharedString::from(format!("缩放 {}", index + 1)),
                 SliderKey::Panel(PanelSlider::ZoomAmount, index),
@@ -7787,6 +7977,11 @@ impl EditorWindow {
     pub(crate) fn prepare_sidebar_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut fields: Vec<FieldKey> = Vec::new();
         let mut colors: Vec<ColorTarget> = Vec::new();
+        self.ensure_field(FieldKey::TimelineJump, window, cx);
+        if self.project.dual_display.is_some() {
+            self.ensure_field(FieldKey::DualZoomDuration, window, cx);
+            self.ensure_field(FieldKey::DualZoomAmount, window, cx);
+        }
 
         // The crop dialog's four `BoundInput`s, while it is open. Created up
         // front rather than pushed onto `fields`, because the match below
@@ -7824,6 +8019,19 @@ impl EditorWindow {
                         .collect()
                 };
                 match selection.track {
+                    TrackKind::Clip => {
+                        for index in indices(timeline.segments.len()) {
+                            fields.push(FieldKey::ClipZoomAmount(index));
+                            fields.push(FieldKey::ClipZoomDuration(index));
+                        }
+                    }
+                    TrackKind::Zoom => {
+                        for index in indices(timeline.zoom_segments.len()) {
+                            fields.push(FieldKey::ZoomAmount(index));
+                            fields.push(FieldKey::ZoomStart(index));
+                            fields.push(FieldKey::ZoomEnd(index));
+                        }
+                    }
                     TrackKind::Style => {
                         for index in indices(timeline.style_segments.len()) {
                             fields.push(FieldKey::StyleName(index));

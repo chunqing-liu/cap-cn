@@ -126,6 +126,12 @@ struct CursorCropMaps {
 
 impl CursorCropMaps {
     fn from_project(project: &ProjectConfiguration, screen_size: XY<u32>) -> Self {
+        if project.dual_display.is_some() {
+            return Self {
+                base: None,
+                styles: Vec::new(),
+            };
+        }
         let base = project
             .background
             .crop
@@ -878,7 +884,8 @@ impl ZoomTransformTimeline {
             return true;
         }
 
-        before.screen_movement_spring == after.screen_movement_spring
+        before.dual_display == after.dual_display
+            && before.screen_movement_spring == after.screen_movement_spring
             && before_timeline.map(TimelineConfiguration::duration)
                 == after_timeline.map(TimelineConfiguration::duration)
             && build_time_map(before_timeline) == build_time_map(after_timeline)
@@ -949,6 +956,33 @@ impl ZoomTransformTimeline {
         recording_clip: Option<u32>,
         prefer_outgoing: bool,
     ) -> Self {
+        let source_cursor = project
+            .dual_display
+            .as_ref()
+            .filter(|_| {
+                project.timeline.as_ref().is_some_and(|timeline| {
+                    timeline
+                        .zoom_segments
+                        .iter()
+                        .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+                })
+            })
+            .map(|dual| CursorEvents {
+                moves: cursor_events
+                    .moves
+                    .iter()
+                    .filter_map(|event| {
+                        let position = dual.cursor_source_position(event.x, event.y)?;
+                        Some(cap_project::CursorMoveEvent {
+                            x: position.x,
+                            y: position.y,
+                            ..event.clone()
+                        })
+                    })
+                    .collect(),
+                clicks: Vec::new(),
+            });
+        let cursor_events = source_cursor.as_ref().unwrap_or(cursor_events);
         Self::new_for_recording_clip(
             project
                 .timeline
@@ -1177,6 +1211,36 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn dual_zoom_track_auto_mode_uses_display_b_local_coordinates() {
+        let project = ProjectConfiguration {
+            dual_display: Some(cap_project::DualDisplayConfiguration {
+                cursor_map: Some(cap_project::DualDisplayCursorMap {
+                    b_origin: XY::new(-1.0, 0.0),
+                    b_size: XY::new(1.0, 1.0),
+                }),
+                ..Default::default()
+            }),
+            ..project_with_crop_styles(vec![auto_segment(0.0, 4.0, 2.0)], Vec::new())
+        };
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, -0.5, 0.5)],
+            ..Default::default()
+        };
+        let mut timeline =
+            ZoomTransformTimeline::from_project(&project, &cursor, 4.0, XY::new(2560, 1440));
+        timeline.precompute();
+        let zoom = timeline.sample(2.0);
+        assert!((zoom.bounds.top_left.x + 0.5).abs() < 0.001);
+        let mut changed = project.clone();
+        changed.dual_display.as_mut().unwrap().a.center.x = 0.4;
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &changed,
+            XY::new(2560, 1440)
+        ));
+    }
 
     fn manual_segment(start: f64, end: f64, amount: f64, x: f64, y: f64) -> ZoomSegment {
         ZoomSegment {
@@ -1628,6 +1692,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             },
             TimelineSegment {
@@ -1638,6 +1703,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             },
         ];
@@ -2096,6 +2162,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             }];
             let cursor = CursorEvents {
@@ -2473,6 +2540,7 @@ mod tests {
                 speed_audio_mode: None,
                 volume: None,
                 hide_cursor: None,
+                auto_zoom: None,
             });
         }
         project
@@ -2587,6 +2655,7 @@ mod tests {
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             }],
             transitions: vec![],
@@ -2648,6 +2717,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                     volume: None,
                 },
                 TimelineSegment {
@@ -2658,6 +2728,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                     volume: None,
                 },
             ],

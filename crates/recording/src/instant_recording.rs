@@ -984,6 +984,8 @@ impl ActorBuilder {
         spawn_instant_recording_actor_inner(
             self.output_path,
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: None,
                 capture_target: self.capture_target,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,

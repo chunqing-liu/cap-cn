@@ -35,6 +35,8 @@ pub enum RecordingMode {
 /// config around for the bar's restart button.
 #[derive(Clone)]
 pub struct StartConfig {
+    #[cfg(windows)]
+    pub secondary_display: Option<ScreenCaptureTarget>,
     pub mode: RecordingMode,
     pub target: ScreenCaptureTarget,
     /// Microphone by name -- the identity `MicrophoneFeed` keys on.
@@ -444,11 +446,20 @@ async fn finalize_studio(
             .meta
             .camera_path()
             .and_then(|_| camera_snapshot.and_then(|snapshot| snapshot.placement));
-        apply_camera_preview_to_project_config(
-            &project_path,
-            camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
-            placement,
-        );
+        if let Some(dual) = cap_project::DualDisplayConfiguration::load_sources(&project_path)? {
+            let mut project = cap_project::ProjectConfiguration::load(&project_path)?;
+            project.dual_display = Some(dual);
+            if let Some(timeline) = &mut project.timeline {
+                timeline.zoom_segments.clear();
+            }
+            project.write(&project_path)?;
+        } else {
+            apply_camera_preview_to_project_config(
+                &project_path,
+                camera_snapshot.map_or_else(current_camera_blur, |snapshot| snapshot.blur),
+                placement,
+            );
+        }
         let library = serde_json::from_value(serde_json::Value::Object(
             crate::store::store_section("animated_gradients"),
         ))
@@ -2008,7 +2019,63 @@ async fn start_internal(
         return Err(anyhow!("Please sign in to use instant recording"));
     }
 
+    #[cfg(windows)]
+    if let Some(secondary) = &config.secondary_display {
+        anyhow::ensure!(
+            config.mode == RecordingMode::Studio,
+            "双屏录制请使用本地编辑模式"
+        );
+        anyhow::ensure!(
+            matches!((&config.target, secondary),
+            (ScreenCaptureTarget::Display { id: a }, ScreenCaptureTarget::Display { id: b }) if a != b),
+            "请选择两台不同的显示器"
+        );
+        anyhow::ensure!(
+            config.camera.is_none() && config.camera_feed.is_none(),
+            "双屏模式暂不支持同时录制摄像头"
+        );
+        anyhow::ensure!(
+            config.target.physical_size().is_some() && secondary.physical_size().is_some(),
+            "录制显示器已断开，请重新选择"
+        );
+    }
     let project_dir = create_project_dir(&config.target, config.mode)?;
+    #[cfg(windows)]
+    if let Some(secondary) = &config.secondary_display {
+        let mut dual = cap_project::DualDisplayConfiguration {
+            source_a: config.target.title().unwrap_or_else(|| "显示器 A".into()),
+            source_b: secondary.title().unwrap_or_else(|| "显示器 B".into()),
+            cursor_baked_in: false,
+            ..Default::default()
+        };
+        if let (Some(a), Some(b)) = (config.target.physical_size(), secondary.physical_size()) {
+            dual.canvas_size = cap_project::XY::new(
+                (a.width() as u32 + b.width() as u32).clamp(4, 8192) & !3,
+                (a.height().max(b.height()) as u32).clamp(2, 8192) & !1,
+            );
+        }
+        if let (Some(a), Some(b)) = (
+            config
+                .target
+                .display()
+                .and_then(|display| display.raw_handle().physical_bounds()),
+            secondary
+                .display()
+                .and_then(|display| display.raw_handle().physical_bounds()),
+        ) {
+            dual.cursor_map = Some(cap_project::DualDisplayCursorMap {
+                b_origin: cap_project::XY::new(
+                    (b.position().x() - a.position().x()) / a.size().width(),
+                    (b.position().y() - a.position().y()) / a.size().height(),
+                ),
+                b_size: cap_project::XY::new(
+                    b.size().width() / a.size().width(),
+                    b.size().height() / a.size().height(),
+                ),
+            });
+        }
+        dual.write_sources(&project_dir)?;
+    }
     let project_name = project_dir
         .file_stem()
         .and_then(|name| name.to_str())
@@ -2251,6 +2318,12 @@ async fn start_attempt_with_upload(
                 camera_lock.is_some(),
                 None,
             );
+            #[cfg(windows)]
+            if let Some(target) = config.secondary_display.clone() {
+                builder = builder
+                    .with_secondary_display(target)
+                    .with_custom_cursor(true);
+            }
             if let Some(gate) = config.start_gate.clone() {
                 builder = builder.with_start_gate(gate);
             }

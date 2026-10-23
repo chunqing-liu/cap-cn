@@ -1882,6 +1882,9 @@ impl PreparedMp4Import {
         cancelled: Arc<AtomicBool>,
         in_flight: crate::import::InFlightImport,
     ) -> Result<Self, String> {
+        if config.dual_display.is_some() {
+            return Err("双屏项目暂不支持导入普通视频；请在单屏项目中导入。".into());
+        }
         if cancelled.load(Ordering::Acquire) {
             return Err("Import cancelled".to_string());
         }
@@ -1995,6 +1998,7 @@ impl PreparedMp4Import {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            auto_zoom: None,
             volume: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
@@ -2479,6 +2483,7 @@ fn full_timeline_for_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             })
         })
@@ -3076,6 +3081,7 @@ fn full_timeline_for_source_segments(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             })
         })
@@ -3167,6 +3173,7 @@ fn source_timeline_segments_for_import(
             name: None,
             speed_audio_mode: segment.speed_audio_mode,
             hide_cursor: segment.hide_cursor,
+            auto_zoom: segment.auto_zoom.clone(),
             volume: segment.volume,
         });
     }
@@ -3295,6 +3302,23 @@ pub(crate) fn append_cap_project_to_editor(
         return Err("Select a Cap project folder".to_string());
     }
 
+    let source_marker = cap_project::DualDisplayConfiguration::load_sources(source_path)
+        .map_err(|error| error.to_string())?;
+    let source_dual = ProjectConfiguration::load(source_path)
+        .ok()
+        .and_then(|config| config.dual_display)
+        .or(source_marker);
+    let target_dual = ProjectConfiguration::load(target_project_path)
+        .map_err(|error| error.to_string())?
+        .dual_display;
+    if source_dual.is_some() != target_dual.is_some() {
+        return Err("双屏项目和单屏项目暂不能混合导入。".into());
+    }
+    if let (Some(source), Some(target)) = (&source_dual, &target_dual)
+        && source.cursor_map != target.cursor_map
+    {
+        return Err("两段双屏录像的显示器坐标不同，暂不能合并；请分别编辑和导出。".into());
+    }
     let source_meta = RecordingMeta::load_for_project(source_path)
         .map_err(|e| format!("Failed to load source project metadata: {e}"))?;
 
@@ -3399,6 +3423,7 @@ pub(crate) fn append_cap_project_to_editor(
                 name: None,
                 speed_audio_mode: source_segment.speed_audio_mode,
                 hide_cursor: source_segment.hide_cursor,
+                auto_zoom: source_segment.auto_zoom.clone(),
                 volume: source_segment.volume,
             });
         }
@@ -3840,6 +3865,7 @@ mod tests {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            auto_zoom: None,
             volume: None,
         }
     }

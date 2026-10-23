@@ -416,6 +416,8 @@ impl DeepLinkAction {
                         .update(cx, |view, _, cx| {
                             view.start_recording_config_with_permit(
                                 recording::StartConfig {
+                                    #[cfg(windows)]
+                                    secondary_display: None,
                                     mode,
                                     target: capture_target,
                                     device_settings,

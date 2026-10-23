@@ -81,6 +81,8 @@ pub struct RecordingOptions {
 
 #[derive(Clone)]
 pub struct RecordingBaseInputs {
+    #[cfg(windows)]
+    pub secondary_display: Option<ScreenCaptureTarget>,
     pub capture_target: ScreenCaptureTarget,
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,

@@ -64,7 +64,7 @@ use crate::{
 pub const TIMELINE_CARD_BORDER: f32 = 1.;
 pub const TIMELINE_PADDING: f32 = 11.;
 pub const TIMELINE_TOP_PADDING: f32 = 9.;
-pub const TIMELINE_BOTTOM_PADDING: f32 = 11.;
+pub const TIMELINE_BOTTOM_PADDING: f32 = 25.;
 pub const TRACK_GUTTER_GAP: f32 = 8.;
 pub const TRACK_GUTTER: f32 = 104.;
 pub const TRACK_ICON_WIDTH: f32 = TRACK_GUTTER - TRACK_GUTTER_GAP;
@@ -163,9 +163,8 @@ pub fn new_segment_min_duration(secs_per_pixel: f64) -> f64 {
 /// and the 4px indicator drawn inside that strip, and the width it is allowed
 /// to take in the card's bottom-right corner.
 const MINIMAP_MIN_CHIP_WIDTH: f32 = 20.;
-pub const MINIMAP_HEIGHT: f32 = 10.;
-pub const MINIMAP_BAR_HEIGHT: f32 = 4.;
-pub const MINIMAP_MAX_WIDTH: f32 = 78.;
+pub const MINIMAP_HEIGHT: f32 = 22.;
+pub const MINIMAP_BAR_HEIGHT: f32 = 12.;
 
 /// The edge fade (`TL/index.tsx:1103-1106`).
 
@@ -252,9 +251,13 @@ fn tabular_numerals() -> gpui::FontFeatures {
 
 /// `MAX_ZOOM_IN = 3` seconds visible (`ED/context.ts:184`).
 pub const MAX_ZOOM_IN: f64 = 3.;
-/// `zoomOutLimit() = Math.min(totalDuration(), 60 * 10)` (`ED/context.ts:1387`).
+/// Full-project view, including recordings longer than ten minutes.
 pub fn zoom_out_limit(total_duration: f64) -> f64 {
-    total_duration.min(600.)
+    if total_duration.is_finite() {
+        total_duration.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 /// The timeline's viewport: how many seconds are visible, and which second is
@@ -327,7 +330,7 @@ impl Transform {
             .max(MAX_ZOOM_IN);
 
         let visible_origin = origin - self.position;
-        let origin_percentage = (visible_origin / self.zoom).min(1.);
+        let origin_percentage = (visible_origin / self.zoom.max(f64::MIN_POSITIVE)).clamp(0., 1.);
         let new_visible_origin = zoom * origin_percentage;
         let new_position = origin - new_visible_origin;
 
@@ -335,24 +338,23 @@ impl Transform {
         self.set_position(new_position, total_duration);
     }
 
-    /// The transport slider's value: `min(max(1 - zoom / zoomOutLimit, 0), 1)`
-    /// (`Player.tsx:450-457`). Fully left is fully zoomed out.
+    /// Logarithmic scale keeps both second-level and multi-hour views reachable.
     pub fn slider_fraction(&self, total_duration: f64) -> f32 {
         let limit = zoom_out_limit(total_duration);
-        if limit <= 0. {
+        if limit <= MAX_ZOOM_IN {
             return 0.;
         }
-        ((1. - self.zoom / limit).clamp(0., 1.)) as f32
+        (1.0 - (self.zoom.max(MAX_ZOOM_IN) / MAX_ZOOM_IN).ln() / (limit / MAX_ZOOM_IN).ln())
+            .clamp(0.0, 1.0) as f32
     }
 
     /// The inverse: `updateZoom((1 - v) * zoomOutLimit(), playbackTime)`
     /// (`Player.tsx:458-463`).
     pub fn apply_slider(&mut self, fraction: f32, origin: f64, total_duration: f64) {
-        self.update_zoom(
-            (1. - fraction as f64) * zoom_out_limit(total_duration),
-            origin,
-            total_duration,
-        );
+        let limit = zoom_out_limit(total_duration).max(MAX_ZOOM_IN);
+        let zoom =
+            MAX_ZOOM_IN * (limit / MAX_ZOOM_IN).powf(1.0 - f64::from(fraction.clamp(0.0, 1.0)));
+        self.update_zoom(zoom, origin, total_duration);
     }
 
     /// The on-mount clamp: a project whose whole duration fits in fewer than
@@ -366,6 +368,9 @@ impl Transform {
         // the viewport uninitialized even after the project is ready.
         if self.zoom <= 0. {
             *self = Self::initial(total_duration);
+        }
+        if total_duration > 600.0 {
+            return;
         }
         let desired = content_width as f64 / 80.;
         if self.zoom > desired {
@@ -467,7 +472,43 @@ pub fn marking_resolution(zoom: f64) -> f64 {
             return candidate;
         }
     }
-    30.0
+    for candidate in [60., 120., 300., 600., 900., 1800., 3600., 7200., 14400.] {
+        if zoom / candidate <= MAX_TIMELINE_MARKINGS {
+            return candidate;
+        }
+    }
+    (zoom / MAX_TIMELINE_MARKINGS / 3600.).ceil().max(1.) * 3600.
+}
+
+pub fn parse_time(value: &str) -> Option<f64> {
+    let parts: Vec<_> = value.trim().split(':').collect();
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    let mut time = 0.0;
+    for (index, part) in parts.iter().enumerate() {
+        let number: f64 = part.trim().parse().ok()?;
+        if !number.is_finite()
+            || number < 0.0
+            || (index > 0 && number >= 60.0)
+            || (index + 1 < parts.len() && number.fract() != 0.0)
+        {
+            return None;
+        }
+        time = time * 60.0 + number;
+    }
+    time.is_finite().then_some(time)
+}
+
+pub fn format_timecode(seconds: f64) -> String {
+    let millis = (seconds.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        millis / 3_600_000,
+        millis / 60_000 % 60,
+        millis / 1000 % 60,
+        millis % 1000
+    )
 }
 
 /// `formatTime` (`routes/editor/utils.ts:1-13`) -- `M:SS`, which is both the
@@ -975,7 +1016,8 @@ pub struct TrackLanes {
 }
 
 pub(crate) fn scene_available(config: &ProjectConfiguration, has_camera: bool) -> bool {
-    has_camera
+    config.dual_display.is_none()
+        && has_camera
         && (config.requires_camera()
             || config
                 .timeline
@@ -1885,13 +1927,10 @@ pub fn render_ruler(theme: &Theme, view: TimelineView, viewport_width: f32) -> A
         .into_any_element()
 }
 
-/// The minimap's strip: pinned to the card's inner right edge, at most
-/// [`MINIMAP_MAX_WIDTH`] wide. Returns its window x and its width, which the
-/// drag maths and the drawn bar have to agree on.
+/// The overview spans the content width so long recordings remain navigable.
 pub fn minimap_bounds(viewport_width: f32) -> (f32, f32) {
     let strip = ruler_width(viewport_width);
-    let width = MINIMAP_MAX_WIDTH.min(strip);
-    (content_left() + strip - width, width)
+    (content_left(), strip)
 }
 
 pub fn minimap_chip(transform: Transform, total_duration: f64, bar_width: f32) -> (f32, f32) {
@@ -2007,7 +2046,7 @@ pub fn render_minimap(
         .overflow_hidden()
         .rounded(px(2.))
         .bg(Hsla::from(theme.editor.ctl_active))
-        .when(!zoomed_in, |this| this.opacity(0.));
+        .when(!zoomed_in, |this| this.opacity(0.35));
 
     for offset in &model.clip_boundaries {
         if *offset <= 0. || *offset >= total {
@@ -2023,6 +2062,17 @@ pub fn render_minimap(
                 .bg(with_alpha(TrackKind::Clip.color(), 0.5)),
         );
     }
+    bar = bar.child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(gpui::relative(
+                (view.playhead / total).clamp(0.0, 1.0) as f32
+            ))
+            .w(px(2.))
+            .bg(Hsla::from(theme.editor.accent)),
+    );
 
     div()
         .w_full()
@@ -3779,8 +3829,7 @@ mod tests {
     fn initial_zoom_is_the_zoom_out_limit() {
         assert_eq!(Transform::initial(15.9).zoom, 15.9);
         assert_eq!(Transform::initial(0.0).position, 0.0);
-        // `Math.min(totalDuration(), 60 * 10)`.
-        assert_eq!(Transform::initial(3_600.0).zoom, 600.0);
+        assert_eq!(Transform::initial(3_600.0).zoom, 3_600.0);
     }
 
     #[test]
@@ -3870,15 +3919,31 @@ mod tests {
         assert_eq!(wide.position, 4.);
     }
 
-    /// A project longer than the 600s zoom-out limit can still be panned to
-    /// its end: the clamp uses `max(zoomOutLimit, totalDuration)`.
     #[test]
-    fn a_long_project_can_pan_past_the_zoom_out_limit() {
+    fn a_long_project_can_fit_the_whole_recording_then_zoom_and_pan_to_its_end() {
         let total = 1_800.0;
         let mut transform = Transform::initial(total);
-        assert_eq!(transform.zoom, 600.);
+        assert_eq!(transform.zoom, total);
+        transform.fit_on_mount(1000., total);
+        assert_eq!(transform.zoom, total);
+        transform.update_zoom(600., 0., total);
         transform.set_position(10_000., total);
         assert_eq!(transform.position, 1_800. + 4. - 600.);
+    }
+
+    #[test]
+    fn long_recording_marks_remain_bounded_and_timecode_jump_is_precise() {
+        assert!(7200. / marking_resolution(7200.) <= MAX_TIMELINE_MARKINGS);
+        assert_eq!(parse_time("01:23:45.125"), Some(5025.125));
+        assert_eq!(parse_time("83:45.125"), Some(5025.125));
+        assert_eq!(parse_time("5025.125"), Some(5025.125));
+        assert_eq!(format_timecode(5025.125), "01:23:45.125");
+        for invalid in ["", "-1", "NaN", "inf", "1:60", "1::2", "1.5:20", "1:2:3:4"] {
+            assert_eq!(parse_time(invalid), None, "{invalid}");
+        }
+        let (left, width) = minimap_bounds(1500.);
+        assert_eq!(left, content_left());
+        assert!(width > 1000.);
     }
 
     #[test]
@@ -3888,7 +3953,7 @@ mod tests {
         assert_eq!(out.slider_fraction(total), 0.0, "fully out is fully left");
         let mut halfway = out;
         halfway.apply_slider(0.5, 0., total);
-        assert_eq!(halfway.zoom, 30.);
+        assert!((halfway.zoom - (MAX_ZOOM_IN * total).sqrt()).abs() < 1e-9);
         assert!((halfway.slider_fraction(total) - 0.5).abs() < 1e-6);
         // The top of the slider asks for zoom 0, which the clamp lifts to
         // MAX_ZOOM_IN -- so the readout does not reach 1.

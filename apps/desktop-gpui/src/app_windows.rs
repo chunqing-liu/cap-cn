@@ -7032,6 +7032,8 @@ mod tests {
         CleanCaptureUi {
             generation: 7,
             config: Some(StartConfig {
+                #[cfg(windows)]
+                secondary_display: None,
                 mode,
                 target: ScreenCaptureTarget::Display {
                     id: "1".parse().unwrap(),

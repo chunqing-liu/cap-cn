@@ -1087,6 +1087,7 @@ mod tests {
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            auto_zoom: None,
             volume: None,
         }
     }

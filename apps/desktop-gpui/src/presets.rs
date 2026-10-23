@@ -160,6 +160,7 @@ pub fn apply_preset(
     next.timeline = current.timeline.clone();
     next.overlay_order = current.overlay_order.clone();
     next.clips = current.clips.clone();
+    next.dual_display = current.dual_display.clone();
     Some(next)
 }
 

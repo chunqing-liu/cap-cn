@@ -940,6 +940,8 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hide_cursor: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_zoom: Option<crate::DualDisplayAutoZoom>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2641,6 +2643,8 @@ pub struct OverlayTrack {
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProjectConfiguration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dual_display: Option<crate::DualDisplayConfiguration>,
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
     pub camera: Camera,
@@ -2712,6 +2716,7 @@ fn key_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool
 impl Default for ProjectConfiguration {
     fn default() -> Self {
         Self {
+            dual_display: None,
             aspect_ratio: Default::default(),
             background: Default::default(),
             camera: Default::default(),
@@ -2897,6 +2902,9 @@ impl ProjectConfiguration {
             });
         let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        if config.dual_display.is_none() {
+            config.dual_display = crate::DualDisplayConfiguration::load_sources(project_path)?;
+        }
         let cursor_motion_blur = config.cursor.motion_blur.clamp(0.0, 1.0);
         let screen_motion_blur = config.screen_motion_blur.clamp(0.0, 1.0);
         let needs_motion_blur_clamp = (config.cursor.motion_blur - cursor_motion_blur).abs()
@@ -3174,6 +3182,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -3184,6 +3193,7 @@ mod tests {
                     speed_audio_mode: None,
                     volume: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                 },
             ],
             transitions,
@@ -4120,6 +4130,7 @@ mod tests {
             speed_audio_mode: None,
             volume: None,
             hide_cursor: hide_cursor.then_some(true),
+            auto_zoom: None,
         }
     }
 

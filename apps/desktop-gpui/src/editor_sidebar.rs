@@ -984,13 +984,10 @@ pub enum PanelSection {
 // ---------------------------------------------------------------------------
 
 impl EditorWindow {
-    /// `sidebarSelection()` (`:577-580`): the timeline selection, **excluding
-    /// clip** -- selecting a clip is a timeline-only affordance (highlight,
-    /// Delete, multi-select) and must not swap the sidebar away from its tab.
     pub fn sidebar_selection(&self) -> Option<&crate::editor_edits::Selection> {
-        self.selection
-            .as_ref()
-            .filter(|selection| selection.track != TrackKind::Clip)
+        self.selection.as_ref().filter(|selection| {
+            selection.track != TrackKind::Clip || self.project.dual_display.is_some()
+        })
     }
 
     /// The tab rail's click: clear any selection, then switch tab and put the
@@ -2472,7 +2469,15 @@ impl EditorWindow {
                 // the indicator is hidden (`:586-592, 667-677`).
                 ui::TabRailItem::new(
                     tab.icon(),
-                    tab.label(),
+                    if self.project.dual_display.is_some() {
+                        match tab {
+                            SidebarTab::Background => "双屏布局",
+                            SidebarTab::Camera => "显示器 B",
+                            _ => tab.label(),
+                        }
+                    } else {
+                        tab.label()
+                    },
                     selection.is_none() && tab == selected_tab,
                     disabled,
                 )
@@ -2536,6 +2541,9 @@ impl EditorWindow {
     /// own `flex flex-col gap-6 p-4` inside it.
     fn render_tab_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let content: AnyElement = match self.sidebar.tab {
+            SidebarTab::Background | SidebarTab::Camera if self.project.dual_display.is_some() => {
+                self.render_dual_display_tab(cx)
+            }
             SidebarTab::Background => self.render_background_tab(cx).into_any_element(),
             SidebarTab::Camera => self.render_camera_tab(cx),
             SidebarTab::Audio => self.render_audio_tab(cx),

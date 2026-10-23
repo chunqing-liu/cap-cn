@@ -533,6 +533,9 @@ impl EditorWindow {
     }
 
     fn show_display(&self) -> bool {
+        if let Some(dual) = &self.project.dual_display {
+            return self.canvas_overlay_visible() && !dual.a.hidden;
+        }
         self.canvas_overlay_visible()
             && !self.pane_scene()
             && !matches!(
@@ -542,6 +545,9 @@ impl EditorWindow {
     }
 
     fn show_camera(&self) -> bool {
+        if let Some(dual) = &self.project.dual_display {
+            return self.canvas_overlay_visible() && !dual.b.hidden && self.camera_rect().is_some();
+        }
         self.canvas_overlay_visible() && !self.pane_scene() && self.camera_rect().is_some()
     }
 
@@ -557,6 +563,9 @@ impl EditorWindow {
     }
 
     fn active_zoom_index(&self) -> Option<usize> {
+        if self.project.dual_display.is_some() {
+            return None;
+        }
         let t = self.preview_or_playhead();
         self.project
             .timeline
@@ -837,6 +846,28 @@ impl EditorWindow {
             padding_scale,
         )) = resize
         {
+            if self.project.dual_display.is_some()
+                && matches!(element, CanvasSelection::Display | CanvasSelection::Camera)
+            {
+                let (mut rect, guides) =
+                    overlay_resize_rect(start, size, delta, dir_x, dir_y, &targets, shift);
+                let scale = (rect.w / start.w).min(rect.h / start.h).clamp(0.02, 100.0);
+                rect.w = (start.w * scale).clamp(0.02, 1.0);
+                rect.h = (start.h * scale).clamp(0.02, 1.0);
+                if let Some(dual) = &mut self.project.dual_display {
+                    let layer = if element == CanvasSelection::Display {
+                        &mut dual.a
+                    } else {
+                        &mut dual.b
+                    };
+                    layer.center = XY::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                    layer.size = XY::new(rect.w, rect.h);
+                    layer.sanitize();
+                }
+                self.snap_guides = guides;
+                self.project_changed_live(cx);
+                return;
+            }
             match element {
                 CanvasSelection::Display => {
                     let (rect, padding, guides) = display_resize_rect(
@@ -1087,6 +1118,11 @@ impl EditorWindow {
     }
 
     fn write_display_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
+        if let Some(dual) = &mut self.project.dual_display {
+            dual.a.center = center;
+            self.project_changed_live(cx);
+            return;
+        }
         self.write_canvas_style(
             crate::editor_sidebar::StyleGroup::Background,
             |project| {
@@ -1101,6 +1137,11 @@ impl EditorWindow {
     }
 
     fn write_camera_position(&mut self, center: XY<f64>, cx: &mut Context<Self>) {
+        if let Some(dual) = &mut self.project.dual_display {
+            dual.b.center = center;
+            self.project_changed_live(cx);
+            return;
+        }
         self.write_canvas_style(
             crate::editor_sidebar::StyleGroup::Camera,
             |project| {
@@ -1343,13 +1384,26 @@ impl EditorWindow {
             );
         }
 
+        let secondary_first = self
+            .project
+            .dual_display
+            .as_ref()
+            .is_some_and(|dual| dual.a_in_front);
+        if secondary_first
+            && self.show_camera()
+            && let Some(rect) = self.camera_rect()
+        {
+            layer =
+                layer.child(self.render_element_box(CanvasSelection::Camera, rect, (cw, ch), cx));
+        }
         if self.show_display()
             && let Some(rect) = self.display_rect()
         {
             layer =
                 layer.child(self.render_element_box(CanvasSelection::Display, rect, (cw, ch), cx));
         }
-        if self.show_camera()
+        if !secondary_first
+            && self.show_camera()
             && let Some(rect) = self.camera_rect()
         {
             layer =
@@ -1541,7 +1595,15 @@ impl EditorWindow {
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(gpui::white())
-                    .child(element.label()),
+                    .child(if self.project.dual_display.is_some() {
+                        match element {
+                            CanvasSelection::Display => "显示器 A".into(),
+                            CanvasSelection::Camera => "显示器 B".into(),
+                            _ => element.label(),
+                        }
+                    } else {
+                        element.label()
+                    }),
             );
 
             if let Some(message) = locked_message {

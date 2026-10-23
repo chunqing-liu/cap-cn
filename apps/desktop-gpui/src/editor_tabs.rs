@@ -1811,6 +1811,18 @@ impl EditorWindow {
     /// The cursor tab (`:820-1000`).
     pub(crate) fn render_cursor_tab(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
+        if self
+            .project
+            .dual_display
+            .as_ref()
+            .is_some_and(|dual| dual.cursor_baked_in)
+        {
+            return div()
+                .text_size(px(13.))
+                .text_color(theme.gray_12)
+                .child("这段旧双屏录像的鼠标已录进画面，无法无损替换或隐藏。新版本录制的双屏视频支持独立鼠标层，可在这里更换样式、大小和点击效果；不影响这段录像的分段缩放编辑。")
+                .into_any_element();
+        }
         let cursor = &self.project.cursor;
         let hidden = cursor.hide;
 

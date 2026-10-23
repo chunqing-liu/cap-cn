@@ -302,6 +302,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
                 speed_audio_mode: None,
                 volume: None,
                 hide_cursor: None,
+                auto_zoom: None,
             })
             .collect(),
         transitions: Vec::new(),

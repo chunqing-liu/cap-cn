@@ -3558,6 +3558,12 @@ impl ProjectUniforms {
     }
 
     pub fn get_base_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
+        if let Some(dual) = &project.dual_display {
+            return (
+                dual.canvas_size.x.clamp(4, MAX_OUTPUT_DIMENSION) & !3,
+                dual.canvas_size.y.clamp(2, MAX_OUTPUT_DIMENSION) & !1,
+            );
+        }
         let crop = Self::get_crop(options, project);
         let padding_factor = Self::auto_padding_factor(project);
 
@@ -3803,6 +3809,9 @@ impl ProjectUniforms {
     }
 
     fn camera_background_effect_mode(&self) -> Option<cap_camera_effects::BlurMode> {
+        if self.project.dual_display.is_some() {
+            return None;
+        }
         blur_mode_from_config(&self.project.camera.background_blur).filter(|mode| {
             *mode != cap_camera_effects::BlurMode::Remove
                 || (self.camera.is_some() && self.scene.regular_camera_transition_opacity() > 0.01)
@@ -5168,7 +5177,7 @@ impl ProjectUniforms {
             })
             .unwrap_or_default();
 
-        Self {
+        let mut uniforms = Self {
             output_size,
             cursor_size: project.cursor.size as f32,
             cursor_x_axis_tilt_radians,
@@ -5199,7 +5208,104 @@ impl ProjectUniforms {
             camera3d,
             camera3d_zoom,
             screen_color_grade,
+        };
+        uniforms.apply_dual_display(
+            options,
+            segment_frames,
+            cursor_events,
+            zoom_timeline.sample(frame_time),
+        );
+        uniforms
+    }
+
+    fn apply_dual_display(
+        &mut self,
+        options: &RenderOptions,
+        frames: &DecodedSegmentFrames,
+        cursor_events: &CursorEvents,
+        track_zoom: InterpolatedZoom,
+    ) {
+        let Some(dual) = &self.project.dual_display else {
+            return;
+        };
+        let timeline_time = f64::from(self.frame_number) / f64::from(self.frame_rate.max(1));
+        let clip = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.get_segment_time(timeline_time))
+            .map(|(_, segment)| segment);
+        let dual = dual.for_clip(clip);
+        let output = XY::new(self.output_size.0, self.output_size.1);
+        let make = |layer: &cap_project::DisplayLayerConfiguration, source: XY<u32>, b: bool| {
+            let mut layer = layer.clone();
+            layer.sanitize();
+            let bounds = layer.fitted_bounds(output, source);
+            let crop = dual.zoom_crop_with_track(
+                b,
+                cursor_events,
+                self.recording_time,
+                track_zoom.source_crop(),
+                track_zoom.t,
+            );
+            CompositeVideoFrameUniforms {
+                crop_bounds: [
+                    crop[0] as f32 * source.x as f32,
+                    crop[1] as f32 * source.y as f32,
+                    crop[2] as f32 * source.x as f32,
+                    crop[3] as f32 * source.y as f32,
+                ],
+                target_bounds: bounds,
+                output_size: [output.x as f32, output.y as f32],
+                frame_size: [source.x as f32, source.y as f32],
+                target_size: [bounds[2] - bounds[0], bounds[3] - bounds[1]],
+                opacity: if layer.hidden { 0.0 } else { 1.0 },
+                ..Default::default()
+            }
+        };
+        let source_a = frames
+            .screen_frame
+            .as_ref()
+            .map_or(frames.screen_size, |frame| {
+                XY::new(frame.width(), frame.height())
+            });
+        self.display = make(&dual.a, source_a, false);
+        self.display_outer_bounds = self.display.target_bounds;
+        self.camera = if dual.b.hidden {
+            None
+        } else {
+            options.camera_size.map(|size| {
+                let size = frames
+                    .camera_frame
+                    .as_ref()
+                    .map_or(size, |frame| XY::new(frame.width(), frame.height()));
+                make(&dual.b, size, true)
+            })
+        };
+        self.camera_only = None;
+        self.frame_chrome = None;
+        self.notch = None;
+        self.camera3d = None;
+        self.camera3d_zoom = None;
+        self.split = None;
+        self.takeover = None;
+    }
+
+    pub(crate) fn cursor_frame(
+        &self,
+        position: XY<f64>,
+    ) -> Option<(&CompositeVideoFrameUniforms, XY<f64>)> {
+        let Some(dual) = &self.project.dual_display else {
+            return Some((&self.display, position));
+        };
+        if dual.cursor_baked_in {
+            return None;
         }
+        if let Some(local) = dual.cursor_position(false, position.x, position.y) {
+            return (!dual.a.hidden).then_some((&self.display, local));
+        }
+        let local = dual.cursor_position(true, position.x, position.y)?;
+        Some((self.camera.as_ref()?, local))
     }
 }
 
@@ -5518,6 +5624,25 @@ mod tests {
         let bounds = inset_crop_bounds([0.0, 0.0, 1.0, 1.0], [1.0, 1.0], 2.0);
 
         assert_eq!(bounds, [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn dual_display_output_keeps_ultrawide_aspect_and_full_export_width() {
+        let options = render_options(2560, 1440);
+        let mut project = ProjectConfiguration {
+            dual_display: Some(cap_project::DualDisplayConfiguration::default()),
+            ..Default::default()
+        };
+        project.background.padding = 50.0;
+        project.aspect_ratio = Some(AspectRatio::Square);
+        assert_eq!(
+            ProjectUniforms::get_output_size(&options, &project, XY::new(5120, 1440)),
+            (5120, 1440)
+        );
+        assert_eq!(
+            ProjectUniforms::get_output_size(&options, &project, XY::new(1920, 1080)),
+            (1920, 540)
+        );
     }
 
     #[test]
@@ -8548,17 +8673,20 @@ impl RendererLayers {
             session.swap_textures();
         }
 
+        let dual = uniforms.project.dual_display.as_ref();
+        let secondary_first = dual.is_some_and(|dual| dual.a_in_front);
         let should_render_screen = render_display
-            && uniforms.scene.should_render_screen()
+            && (dual.is_some() || uniforms.scene.should_render_screen())
             // A fully-faded card (e.g. a held Fullscreen text takeover) draws
             // nothing visible; skip the pass entirely.
             && uniforms.display.opacity > 0.001
             && self.display.has_valid_frame();
-        let should_render_cursor = if render_display {
-            uniforms.scene.should_render_screen()
-        } else {
-            true
-        };
+        let should_render_cursor = dual.is_none_or(|dual| !dual.cursor_baked_in)
+            && if render_display {
+                uniforms.scene.should_render_screen()
+            } else {
+                true
+            };
 
         // When a 3D camera pose is active, the content group (frame chrome,
         // display, cursor, notch, camera) renders into the spare ping-pong
@@ -8579,6 +8707,9 @@ impl RendererLayers {
             };
         }
 
+        if secondary_first && render_display {
+            self.camera.render(passes.pass(content_view!(), load));
+        }
         if should_render_screen && self.frame.has_content() {
             self.frame.render(passes.pass(content_view!(), load));
         }
@@ -8587,7 +8718,7 @@ impl RendererLayers {
             self.display.render(passes.pass(content_view!(), load));
         }
 
-        if should_render_cursor {
+        if should_render_cursor && dual.is_none() {
             let pass = passes.pass(content_view!(), load);
             self.click_ripple.render(pass);
             self.cursor.render(pass);
@@ -8605,10 +8736,18 @@ impl RendererLayers {
         }
 
         // Also render regular camera overlay during transitions when its opacity > 0
-        if uniforms.scene.should_render_camera()
-            && uniforms.scene.regular_camera_transition_opacity() > 0.01
+        if !secondary_first
+            && (dual.is_some()
+                || (uniforms.scene.should_render_camera()
+                    && uniforms.scene.regular_camera_transition_opacity() > 0.01))
         {
             self.camera.render(passes.pass(content_view!(), load));
+        }
+
+        if should_render_cursor && dual.is_some() {
+            let pass = passes.pass(content_view!(), load);
+            self.click_ripple.render(pass);
+            self.cursor.render(pass);
         }
 
         if camera3d_active {

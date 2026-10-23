@@ -387,8 +387,11 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         }
 
         if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
+            // WGC quantizes this interval to desktop updates: 60fps requested
+            // on a 75Hz desktop can become 37.5fps. Leave headroom here and
+            // let FrameCadenceGate enforce the requested rate before readback.
             settings.min_update_interval =
-                Some(Duration::from_secs_f64(1.0 / self.config.fps as f64));
+                Some(Duration::from_secs_f64(0.5 / self.config.fps as f64));
         }
 
         settings.fps = Some(self.config.fps);
@@ -419,6 +422,13 @@ pub struct VideoSourceConfig {
     settings: scap_direct3d::Settings,
     pub d3d_device: ID3D11Device,
 }
+
+impl VideoSourceConfig {
+    pub fn frame_rate(&self) -> u32 {
+        self.video_info.fps()
+    }
+}
+
 pub struct VideoSource {
     video_info: VideoInfo,
     ctrl_tx: std::sync::mpsc::SyncSender<VideoControl>,

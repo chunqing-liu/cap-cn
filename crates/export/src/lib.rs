@@ -305,6 +305,7 @@ pub fn synthesize_default_timeline(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             })
         })

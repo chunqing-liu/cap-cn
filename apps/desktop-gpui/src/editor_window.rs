@@ -440,6 +440,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                     volume: None,
                 })
                 .collect(),
@@ -2385,6 +2386,15 @@ impl EditorWindow {
         if !change(&mut self.project) {
             return false;
         }
+        if let (Some(dual), Some(timeline)) =
+            (&self.project.dual_display, &mut self.project.timeline)
+        {
+            for segment in &mut timeline.segments {
+                segment
+                    .auto_zoom
+                    .get_or_insert_with(|| dual.auto_zoom.clone());
+            }
+        }
         self.set_selection(None, cx);
         self.project_changed(window, cx);
         true
@@ -3559,12 +3569,38 @@ impl EditorWindow {
         }
 
         if modifier && !keystroke.modifiers.alt {
+            match keystroke.key.as_str() {
+                "0" => {
+                    cx.stop_propagation();
+                    self.fit_entire_timeline(cx);
+                    window.refresh();
+                    return;
+                }
+                "g" => {
+                    cx.stop_propagation();
+                    self.ensure_field(crate::editor_panels::FieldKey::TimelineJump, window, cx);
+                    if let Some(input) = self
+                        .field(crate::editor_panels::FieldKey::TimelineJump)
+                        .cloned()
+                    {
+                        input.update(cx, |input, cx| input.focus_and_select_all(window, cx));
+                    }
+                    return;
+                }
+                "f" => {
+                    cx.stop_propagation();
+                    self.center_timeline_on_playhead(cx);
+                    window.refresh();
+                    return;
+                }
+                _ => {}
+            }
             // The combo normaliser maps both `=` and `+` onto `=`
             // (`useEditorShortcuts.ts:12-30`); gpui reports the unshifted key,
             // so `shift-=` arrives as `=` too.
             let step = match keystroke.key.as_str() {
-                "=" | "+" => Some(1. / 1.1),
-                "-" | "_" => Some(1.1),
+                "=" | "+" => Some(1. / 1.5),
+                "-" | "_" => Some(1.5),
                 _ => None,
             };
             if let Some(step) = step {
@@ -3660,6 +3696,41 @@ impl EditorWindow {
         cx.notify();
     }
 
+    pub(crate) fn center_timeline_on_playhead(&mut self, cx: &mut Context<Self>) {
+        let position = self.playhead - self.view.transform.zoom / 2.0;
+        self.view
+            .transform
+            .set_position(position, self.total_duration());
+        self.note_transform("center-playhead", Some(self.playhead));
+        cx.notify();
+    }
+
+    fn fit_entire_timeline(&mut self, cx: &mut Context<Self>) {
+        let total = self.total_duration();
+        self.view.transform.update_zoom(total, 0.0, total);
+        self.view.transform.set_position(0.0, total);
+        self.note_transform("fit-entire", Some(self.playhead));
+        cx.notify();
+    }
+
+    pub(crate) fn select_current_dual_clip(&mut self, cx: &mut Context<Self>) {
+        let index = self
+            .project
+            .timeline
+            .as_ref()
+            .and_then(|timeline| timeline.get_frame_mapping(self.playhead))
+            .map(|mapping| match mapping {
+                cap_project::TimelineFrameMapping::Single { source, .. }
+                | cap_project::TimelineFrameMapping::Hold { source, .. } => source.segment_index,
+                cap_project::TimelineFrameMapping::Transition { incoming, .. } => {
+                    incoming.segment_index
+                }
+            });
+        if let Some(index) = index {
+            self.set_selection(Some(Selection::single(TrackKind::Clip, index)), cx);
+        }
+    }
+
     fn minimap_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -3737,9 +3808,11 @@ impl EditorWindow {
 
         if event.modifiers.control {
             let origin = self.view.preview_time.unwrap_or(self.playhead);
-            let delta = timeline::wheel_zoom_delta(delta_y, self.view.transform.zoom);
+            let factor = (delta_y / 240.0).exp().clamp(0.25, 4.0);
             let zoom = self.view.transform.zoom;
-            self.view.transform.update_zoom(zoom + delta, origin, total);
+            self.view
+                .transform
+                .update_zoom(zoom * factor, origin, total);
         } else if horizontal {
             let delta = if delta_x.abs() > 0.5 {
                 delta_x
@@ -5631,7 +5704,7 @@ impl EditorWindow {
     /// recorded clicks off the bundle, run the auto-zoom pass, and land the
     /// result as the zoom track.
     pub(crate) fn generate_auto_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.generating_auto_zoom {
+        if self.project.dual_display.is_some() || self.generating_auto_zoom {
             return;
         }
         self.generating_auto_zoom = true;
@@ -7128,6 +7201,7 @@ impl EditorWindow {
         next.timeline = self.project.timeline.clone();
         next.overlay_order = self.project.overlay_order.clone();
         next.clips = self.project.clips.clone();
+        next.dual_display = self.project.dual_display.clone();
         self.apply_project_preset(next, window, cx);
     }
 
@@ -10028,7 +10102,6 @@ impl EditorWindow {
         // `Math.max(editorState.previewTime ?? editorState.playbackTime, 0)`
         // (`Player.tsx:359-365`) -- the clock reads the *hover* time when there
         // is one, which is what makes it a readout for the ghost playhead.
-        let current = self.view.preview_time.unwrap_or(self.playhead).max(0.0);
         let live = self.transport.is_some() || self.preparing_controls_ready();
         // `{!editorState.playing || isAtEnd() ? <IconCapPlay/> :
         // <IconCapPause/>}` (`Player.tsx:388-392`).
@@ -10080,9 +10153,20 @@ impl EditorWindow {
                     .when(narrow, |clock| clock.text_size(px(12.)))
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(Hsla::from(editor.text_1))
-                            .child(timeline::format_time(current)),
+                            .id("timeline-jump-tooltip")
+                            .tooltip(move |_, cx| {
+                                ui::Tooltip::new(
+                                    &theme,
+                                    "输入 时:分:秒、小数秒或总秒数，回车跳转。Ctrl+G 聚焦；Ctrl+F 定位播放头。",
+                                ).view(cx)
+                            })
+                            .children(self.field(crate::editor_panels::FieldKey::TimelineJump).map(|input| {
+                                ui::TextInput::plain(&theme, "timeline-jump", input)
+                                    .width(px(if narrow { 108. } else { 136. }))
+                                    .height(px(28.))
+                                    .padding_x(px(5.))
+                                    .text_size(px(12.))
+                            })),
                     )
                     .children((!narrow).then(|| {
                         div()
@@ -10200,10 +10284,24 @@ impl EditorWindow {
                             ),
                     )
                     .child(self.header_divider())
+                    .children((!compact).then(|| {
+                        ui::Button::plain(
+                            &theme, "timeline-fit-all", ui::ButtonVariant::Gray, ui::ButtonSize::Sm,
+                        )
+                        .label("全片")
+                        .on_click(cx.listener(|this, _, _, cx| this.fit_entire_timeline(cx)))
+                    }))
+                    .children((!compact).then(|| {
+                        ui::Button::plain(
+                            &theme, "timeline-center-playhead", ui::ButtonVariant::Gray, ui::ButtonSize::Sm,
+                        )
+                        .label("定位播放头")
+                        .on_click(cx.listener(|this, _, _, cx| this.center_timeline_on_playhead(cx)))
+                    }))
                     // `IconCapZoomOut` -> `updateZoom(zoom * 1.1,
                     // playbackTime)`; `IconCapZoomIn` -> `zoom / 1.1`
                     // (`Player.tsx:432-449`).
-                    .child(self.zoom_button("transport-zoom-out", "icons/zoom-out.svg", 1.1, cx))
+                    .child(self.zoom_button("transport-zoom-out", "icons/zoom-out.svg", 1.5, cx))
                     // `Slider class="w-24" minValue={0} maxValue={1}
                     // step={0.001}`. Fully left is fully zoomed *out* -- the
                     // value is `1 - zoom / zoomOutLimit()`.
@@ -10233,7 +10331,7 @@ impl EditorWindow {
                     .child(self.zoom_button(
                         "transport-zoom-in",
                         "icons/zoom-in.svg",
-                        1. / 1.1,
+                        1. / 1.5,
                         cx,
                     )),
             )
@@ -10574,7 +10672,8 @@ impl EditorWindow {
         // made from nothing.
         let camera3d_prompt =
             model.segments(TrackKind::ThreeD).is_empty() && self.transport.is_some();
-        let zoom_prompt = !self.zoom_prompt_dismissed
+        let zoom_prompt = self.project.dual_display.is_none()
+            && !self.zoom_prompt_dismissed
             && model.segments(TrackKind::Zoom).is_empty()
             && self
                 .summary()
@@ -12177,6 +12276,7 @@ mod tests {
                     name: None,
                     speed_audio_mode: None,
                     hide_cursor: None,
+                    auto_zoom: None,
                     volume: None,
                 }],
                 transitions: Vec::new(),
@@ -12232,6 +12332,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        auto_zoom: None,
                         volume: None,
                     },
                     cap_project::TimelineSegment {
@@ -12242,6 +12343,7 @@ mod tests {
                         name: None,
                         speed_audio_mode: None,
                         hide_cursor: None,
+                        auto_zoom: None,
                         volume: None,
                     },
                 ],

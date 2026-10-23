@@ -122,6 +122,7 @@ pub enum ExportResolution {
     P720,
     P1080,
     P4k,
+    P5120x1440,
 }
 
 impl ExportResolution {
@@ -130,6 +131,7 @@ impl ExportResolution {
             Self::P720 => "720p",
             Self::P1080 => "1080p",
             Self::P4k => "4K",
+            Self::P5120x1440 => "5120×1440",
         }
     }
 
@@ -138,6 +140,7 @@ impl ExportResolution {
             Self::P720 => (1280, 720),
             Self::P1080 => (1920, 1080),
             Self::P4k => (3840, 2160),
+            Self::P5120x1440 => (5120, 1440),
         }
     }
 
@@ -145,6 +148,7 @@ impl ExportResolution {
         match slug {
             "1080p" => Self::P1080,
             "4K" | "4k" => Self::P4k,
+            "5120×1440" => Self::P5120x1440,
             _ => Self::P720,
         }
     }
@@ -501,12 +505,26 @@ impl EditorWindow {
             self.toggle_play_from_crop(cx);
         }
         let mut ui = ExportUi::load();
+        if self
+            .project
+            .dual_display
+            .as_ref()
+            .is_some_and(|dual| dual.canvas_size == XY::new(5120, 1440))
+        {
+            ui.resolution = ExportResolution::P5120x1440;
+            ui.destination = ExportDestination::File;
+            ui.format = ExportFormatKind::Mp4;
+            ui.cursor_only = false;
+        }
         if let Ok(meta) = RecordingMeta::load_for_project(&self.project_path) {
             self.sharing = meta.sharing;
         }
         if has_transparent_background(&self.project) {
             ui.format = ExportFormatKind::Gif;
-            if ui.resolution == ExportResolution::P4k {
+            if matches!(
+                ui.resolution,
+                ExportResolution::P4k | ExportResolution::P5120x1440
+            ) {
                 ui.resolution = ExportResolution::P1080;
             }
             if ui.destination == ExportDestination::Link {
@@ -590,7 +608,7 @@ impl EditorWindow {
         let allowed = if gif && !ui.cursor_only {
             &[10, 15, 20, 25, 30][..]
         } else {
-            &[15, 30, 60][..]
+            &[15, 30, 60, 120][..]
         };
         if !allowed.contains(&ui.fps) {
             ui.fps = if gif { 15 } else { 30 };
@@ -601,7 +619,7 @@ impl EditorWindow {
         if ui.format == ExportFormatKind::Gif && !ui.cursor_only {
             &[10, 15, 20, 25, 30]
         } else {
-            &[15, 30, 60]
+            &[15, 30, 60, 120]
         }
     }
 
@@ -614,6 +632,7 @@ impl EditorWindow {
                 ExportResolution::P720,
                 ExportResolution::P1080,
                 ExportResolution::P4k,
+                ExportResolution::P5120x1440,
             ]
         }
     }
@@ -1961,7 +1980,10 @@ impl EditorWindow {
                             if ui.destination == ExportDestination::Link {
                                 ui.destination = ExportDestination::File;
                             }
-                            if ui.resolution == ExportResolution::P4k {
+                            if matches!(
+                                ui.resolution,
+                                ExportResolution::P4k | ExportResolution::P5120x1440
+                            ) {
                                 ui.resolution = ExportResolution::P1080;
                             }
                         }

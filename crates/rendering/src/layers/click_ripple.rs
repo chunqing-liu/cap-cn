@@ -161,22 +161,6 @@ impl ClickRippleLayer {
             ripple.strength_clamped(),
         ];
 
-        let display = &uniforms.display;
-        let radius = cursor_height_px(
-            display.frame_size[1],
-            display.crop_bounds[3] - display.crop_bounds[1],
-            display.target_size[1],
-            uniforms.cursor_size,
-            1.0,
-        ) * RIPPLE_RADIUS_SCALE
-            * ripple.size_clamped();
-
-        if !radius.is_finite() || radius <= 0.0 {
-            return;
-        }
-
-        let quad_side = (radius * 2.0 * RIPPLE_QUAD_EXTENT) as f64;
-        let size = Coord::<FrameSpace>::new(XY::new(quad_side, quad_side));
         let hotspot = XY::new(0.5, 0.5);
         let placement = CursorPlacement { uniforms };
 
@@ -185,6 +169,22 @@ impl ClickRippleLayer {
 
         for click_ripple in uniforms.click_ripples.iter().take(MAX_CLICK_RIPPLES) {
             let position_uv = click_ripple.position.coord;
+            let Some((display, _)) = uniforms.cursor_frame(position_uv) else {
+                continue;
+            };
+            let radius = cursor_height_px(
+                display.frame_size[1],
+                display.crop_bounds[3] - display.crop_bounds[1],
+                display.target_size[1],
+                uniforms.cursor_size,
+                1.0,
+            ) * RIPPLE_RADIUS_SCALE
+                * ripple.size_clamped();
+            if !radius.is_finite() || radius <= 0.0 {
+                continue;
+            }
+            let quad_side = (radius * 2.0 * RIPPLE_QUAD_EXTENT) as f64;
+            let size = Coord::<FrameSpace>::new(XY::new(quad_side, quad_side));
             if !position_uv.x.is_finite() || !position_uv.y.is_finite() {
                 continue;
             }
@@ -203,7 +203,7 @@ impl ClickRippleLayer {
                     0.0,
                     0.0,
                 ],
-                screen_bounds: uniforms.display.target_bounds,
+                screen_bounds: display.target_bounds,
                 color,
                 params: [
                     click_ripple.progress.clamp(0.0, 1.0),

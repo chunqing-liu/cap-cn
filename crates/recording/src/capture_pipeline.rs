@@ -111,10 +111,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         );
 
         if fragmented {
-            let fragments_dir = output_path
-                .parent()
-                .map(|p| p.join("display"))
-                .unwrap_or_else(|| output_path.with_file_name("display"));
+            let fragments_dir = output_path.with_extension("");
 
             let bpp = if ultra {
                 H264EncoderBuilder::ULTRA_BPP
@@ -247,10 +244,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         let ultra = quality == StudioQuality::Ultra;
 
         if fragmented {
-            let fragments_dir = output_path
-                .parent()
-                .map(|p| p.join("display"))
-                .unwrap_or_else(|| output_path.with_file_name("display"));
+            let fragments_dir = output_path.with_extension("");
 
             let bpp = if ultra {
                 H264EncoderBuilder::ULTRA_BPP
@@ -325,6 +319,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             }
         } else {
             let d3d_device = screen_capture.d3d_device.clone();
+            let frame_rate = screen_capture.frame_rate();
             let bitrate_multiplier = if ultra { 0.3f32 } else { 0.15f32 };
 
             OutputPipeline::builder(output_path.clone())
@@ -335,7 +330,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                     d3d_device,
                     bitrate_multiplier,
-                    frame_rate: 30u32,
+                    frame_rate,
                     output_size: output_size.map(|(w, h)| windows::Graphics::SizeInt32 {
                         Width: w as i32,
                         Height: h as i32,

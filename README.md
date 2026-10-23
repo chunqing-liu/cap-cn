@@ -8,13 +8,23 @@
 
 **[前往最新版本下载](https://github.com/chunqing-liu/cap-cn/releases/latest)**
 
+### 双屏编辑增强预览版
+
+**[下载双屏编辑增强预览版](https://github.com/chunqing-liu/cap-cn/releases/tag/v0.6.1-cn.2-dual-preview.1)** · [功能、使用方法与验证范围](tools/zh-cn/releases/dual-preview.md)
+
+在原中文版基础上新增双屏同时录制、单一画布导出、视频片段独立自动缩放及长时间轴导航，并修复双屏模式下原缩放轨道失效的问题。保留轨道的自动 / 手动模式、手动焦点和进出动画。
+
+这是独立的 Windows x64 **预览便携包**，不是替换稳定版的自动更新，也不包含新的安装程序。请解压到新目录，保存并退出旧版后再打开同一工程。尚未完成跨电脑、长时间双屏录制或所有原功能的完整验收；不要用于无法重录且没有备份的重要录屏。
+
+### 稳定版
+
 | 文件 | 用途 |
 | --- | --- |
 | `*-windows-x64-setup.exe` | 推荐：中文安装向导，无需管理员权限 |
 | `*-windows-x64-portable.zip` | 解压后运行 `Cap.exe` |
 | `*-windows-x64-maintenance.zip` | 维护用源码补丁、汉化词表、脚本与许可 |
 
-- 当前版本：**0.6.1-cn.2**，基于官方 **cap-v0.6.1**。
+- 当前稳定版：**0.6.1-cn.2**，基于官方 **cap-v0.6.1**。
 - 适用于 Windows 10 2004 / Windows 11 x64；Windows N / KN 可能需要安装媒体功能包。
 - 默认安装到 `%LOCALAPPDATA%\Programs\CapCN`，不要选择官方 Cap 的目录。
 - 安装包包含媒体依赖和应用本地 C++ 运行库，不需要先安装官方版。

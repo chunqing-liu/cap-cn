@@ -2210,6 +2210,7 @@ pub fn apply_caption_result(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             }],
             transitions: Vec::new(),

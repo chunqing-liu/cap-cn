@@ -453,6 +453,13 @@ impl CursorLayer {
         let time_s = segment_frames.recording_time;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
+            self.bind_group = None;
+            return;
+        };
+        let Some((display, local_position)) =
+            uniforms.cursor_frame(interpolated_cursor.position.coord)
+        else {
+            self.bind_group = None;
             return;
         };
 
@@ -476,10 +483,16 @@ impl CursorLayer {
             .as_ref()
             .filter(|prev| prev.cursor_id == interpolated_cursor.cursor_id)
             .map(|prev| {
-                let current = uniforms
-                    .display
-                    .source_uv_to_target(interpolated_cursor.position.coord);
-                let previous = uniforms.display.source_uv_to_target(prev.position.coord);
+                let current = display.source_uv_to_target(local_position);
+                let Some((previous_display, previous_local)) =
+                    uniforms.cursor_frame(prev.position.coord)
+                else {
+                    return XY::new(0.0, 0.0);
+                };
+                if previous_display.target_bounds != display.target_bounds {
+                    return XY::new(0.0, 0.0);
+                }
+                let previous = previous_display.source_uv_to_target(previous_local);
                 (current - previous).map(|value| value as f32)
             })
             .unwrap_or_else(|| XY::new(0.0, 0.0));
@@ -575,7 +588,6 @@ impl CursorLayer {
                 uniforms.cursor_event_order.clicks,
             );
             let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
-            let display = &uniforms.display;
             let size = cursor_height_px(
                 display.frame_size[1],
                 display.crop_bounds[3] - display.crop_bounds[1],
@@ -621,7 +633,7 @@ impl CursorLayer {
                 0.0,
                 0.0,
             ],
-            screen_bounds: uniforms.display.target_bounds,
+            screen_bounds: display.target_bounds,
             motion_vector_strength: [
                 scaled_motion.x,
                 scaled_motion.y,
@@ -679,7 +691,10 @@ impl CursorPlacement<'_> {
         opacity: f32,
     ) -> ([f32; 4], f32) {
         let hotspot = size.coord * hotspot_frac;
-        let position = self.uniforms.display.source_uv_to_target(position_uv) - hotspot;
+        let Some((display, local)) = self.uniforms.cursor_frame(position_uv) else {
+            return ([0.0; 4], 0.0);
+        };
+        let position = display.source_uv_to_target(local) - hotspot;
         let position_size = [
             position.x as f32,
             position.y as f32,

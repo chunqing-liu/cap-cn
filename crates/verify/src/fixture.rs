@@ -312,6 +312,7 @@ pub fn write_project_files(
             name: None,
             speed_audio_mode: None,
             hide_cursor: None,
+            auto_zoom: None,
             volume: None,
         });
         clips.push(ClipConfiguration {

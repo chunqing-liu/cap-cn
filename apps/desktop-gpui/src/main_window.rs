@@ -790,6 +790,7 @@ pub struct MainWindow {
     system_audio: bool,
     /// Which display/window is selected for each split target.
     selected_display: Option<DisplayOption>,
+    secondary_display: Option<DisplayOption>,
     selected_window: Option<WindowOption>,
     panel: Option<Panel>,
     /// Live filter text for the device and target panels -- a mirror of
@@ -1072,6 +1073,7 @@ impl MainWindow {
             device_format_notice: None,
             system_audio: crate::store::recording_system_audio(),
             selected_display: None,
+            secondary_display: None,
             selected_window: None,
             panel: None,
             search: String::new(),
@@ -1793,6 +1795,9 @@ impl MainWindow {
     /// select window all land here, so there is one place a mode change
     /// happens.
     pub fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        if mode != Mode::Studio {
+            self.secondary_display = None;
+        }
         self.clear_mode_hover();
         cx.notify();
         if self.mode == mode
@@ -1907,6 +1912,17 @@ impl MainWindow {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(2))
                 .await;
+            #[cfg(windows)]
+            if std::env::var("CAP_GPUI_AUTO_DUAL_DISPLAY").is_ok_and(|value| value == "1") {
+                let ready = this.update_in(cx, |this, _, cx| {
+                    this.cycle_secondary_display(cx);
+                    this.secondary_display.is_some() && mode == Mode::Studio && overlay.is_none()
+                }).unwrap_or(false);
+                if !ready {
+                    tracing::error!("Dual-display smoke test needs two connected displays and Studio display mode");
+                    return;
+                }
+            }
             if !skip_mic {
                 // Exercise the microphone path too: record with the system default
                 // input. "First in the list" is wrong on a machine with a
@@ -2193,6 +2209,16 @@ impl MainWindow {
             )
         };
         let config = recording::StartConfig {
+            #[cfg(windows)]
+            secondary_display: if matches!(target, ScreenCaptureTarget::Display { .. }) {
+                self.secondary_display
+                    .as_ref()
+                    .map(|display| ScreenCaptureTarget::Display {
+                        id: display.id.clone(),
+                    })
+            } else {
+                None
+            },
             mode,
             target,
             device_settings,
@@ -2207,6 +2233,18 @@ impl MainWindow {
             #[cfg(target_os = "linux")]
             linux_instant_camera: None,
             start_gate: None,
+        };
+
+        #[cfg(windows)]
+        let config = {
+            let mut config = config;
+            if config.secondary_display.is_some() {
+                config.camera = None;
+                config.camera_feed = None;
+                config.device_settings.camera = None;
+                config.input_readiness.camera = None;
+            }
+            config
         };
 
         // `RecordingSettingsStore.target`: what the Start shortcuts fall back
@@ -3975,6 +4013,32 @@ impl MainWindow {
                             }),
                     ),
             )
+            .when(
+                matches!(panel, Panel::Target(TargetType::Display))
+                    && self.uses_display_multiselect(cx),
+                |view| {
+                    view.child(
+                        div().pt(px(12.)).flex_shrink_0().child(
+                            ui::Button::plain(
+                                &theme,
+                                "confirm-display-selection",
+                                ui::ButtonVariant::Primary,
+                                ui::ButtonSize::Lg,
+                            )
+                            .label(format!(
+                                "完成（已选 {} 个显示器）",
+                                usize::from(self.selected_display.is_some())
+                                    + usize::from(self.secondary_display.is_some())
+                            ))
+                            .full_width()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_panel(cx);
+                                this.sync_overlays(cx);
+                            })),
+                        ),
+                    )
+                },
+            )
     }
 
     fn close_panel(&mut self, cx: &mut Context<Self>) {
@@ -4001,7 +4065,12 @@ impl MainWindow {
             self.device_format_generation += 1;
             cx.notify();
         } else {
+            let sync_displays = matches!(self.panel, Some(Panel::Target(TargetType::Display)))
+                && self.uses_display_multiselect(cx);
             self.close_panel(cx);
+            if sync_displays {
+                self.sync_overlays(cx);
+            }
         }
     }
 
@@ -4039,6 +4108,19 @@ impl MainWindow {
     }
 
     pub fn open_panel(&mut self, panel: Panel, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(panel, Panel::Target(TargetType::Display))
+            && self.uses_display_multiselect(cx)
+            && self.target == Some(TargetType::Display)
+            && self.selected_display.is_none()
+        {
+            let primary = scap_targets::Display::primary().id();
+            self.selected_display = self
+                .devices
+                .displays
+                .iter()
+                .find(|display| display.id == primary)
+                .cloned();
+        }
         self.input_poll_task = None;
         self.input_poll_generation = self.input_poll_generation.wrapping_add(1);
         self.clear_mode_hover();
@@ -5498,6 +5580,39 @@ impl MainWindow {
         (MAIN_WINDOW_WIDTH - 50.) / 2.
     }
 
+    fn uses_display_multiselect(&self, cx: &gpui::App) -> bool {
+        cfg!(windows)
+            && self.effective_mode(cx) != Mode::Screenshot
+            && self.session.read(cx).editor_recording_target().is_none()
+    }
+
+    fn toggle_display_selection(&mut self, display: DisplayOption, cx: &mut Context<Self>) {
+        if self
+            .selected_display
+            .as_ref()
+            .is_some_and(|selected| selected.id == display.id)
+        {
+            if let Some(secondary) = self.secondary_display.take() {
+                self.selected_display = Some(secondary);
+            }
+        } else if self
+            .secondary_display
+            .as_ref()
+            .is_some_and(|selected| selected.id == display.id)
+        {
+            self.secondary_display = None;
+        } else if self.selected_display.is_none() {
+            self.selected_display = Some(display);
+        } else if self.secondary_display.is_none() {
+            self.set_mode(Mode::Studio, cx);
+            self.secondary_display = Some(display);
+        } else {
+            return;
+        }
+        self.target = Some(TargetType::Display);
+        cx.notify();
+    }
+
     /// `TargetMenuGrid`: two columns of cards.
     ///
     /// Each card leads with a live 320x180 capture of the display or window
@@ -5506,7 +5621,29 @@ impl MainWindow {
     /// or when the `<img>` errors (`TargetCard.tsx:367-374`).
     fn render_target_grid(&self, target: TargetType, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let grid = div().flex().flex_col().gap(px(8.)).w_full();
+        let multi_select = target == TargetType::Display && self.uses_display_multiselect(cx);
+        let selected_count = usize::from(self.selected_display.is_some())
+            + usize::from(self.secondary_display.is_some());
+        let grid = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .w_full()
+            .when(multi_select, |grid| {
+                grid.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.gray_12)
+                        .child(format!("选择显示器 · 已选 {selected_count}/2")),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(16.))
+                        .text_color(theme.gray_11)
+                        .child("至少保留 1 个，最多选择 2 个。双屏自动使用本地编辑，最终导出一个视频。"),
+                )
+            });
 
         if self.enumerating {
             return grid.child(
@@ -5529,10 +5666,17 @@ impl MainWindow {
                     .iter()
                     .filter(|display| self.matches_search(&display.label))
                 {
-                    let selected = self
+                    let primary = self
                         .selected_display
                         .as_ref()
                         .is_some_and(|current| current.id == display.id);
+                    let secondary = multi_select
+                        && self
+                            .secondary_display
+                            .as_ref()
+                            .is_some_and(|current| current.id == display.id);
+                    let selected = primary || secondary;
+                    let at_limit = multi_select && selected_count == 2 && !selected;
                     let chosen = display.clone();
 
                     cards.push(
@@ -5544,13 +5688,73 @@ impl MainWindow {
                             None,
                             display.describe_refresh_rate(),
                             selected,
-                            cx.listener(move |this, _, _window, cx| {
+                            cx.listener(move |this, _, _, cx| {
+                                if multi_select {
+                                    this.toggle_display_selection(chosen.clone(), cx);
+                                    return;
+                                }
+                                if this
+                                    .secondary_display
+                                    .as_ref()
+                                    .is_some_and(|display| display.id == chosen.id)
+                                {
+                                    this.secondary_display = None;
+                                }
                                 this.selected_display = Some(chosen.clone());
                                 this.target = Some(TargetType::Display);
                                 this.close_panel(cx);
                                 this.sync_overlays(cx);
                             }),
                         )
+                        .relative()
+                        .when(at_limit, |card| card.opacity(0.45))
+                        .when(multi_select, |card| {
+                            card.child(
+                                div()
+                                    .absolute()
+                                    .top(px(5.))
+                                    .right(px(5.))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .px(px(5.))
+                                    .py(px(3.))
+                                    .rounded(px(4.))
+                                    .bg(if selected { theme.blue_9 } else { theme.gray_3 })
+                                    .text_size(px(10.))
+                                    .text_color(if selected {
+                                        gpui::white()
+                                    } else {
+                                        theme.gray_12.into()
+                                    })
+                                    .child(
+                                        div()
+                                            .size(px(12.))
+                                            .border_1()
+                                            .border_color(if selected {
+                                                gpui::white()
+                                            } else {
+                                                theme.gray_9.into()
+                                            })
+                                            .rounded(px(2.))
+                                            .when(selected, |check| {
+                                                check.child(
+                                                    svg()
+                                                        .path("icons/check.svg")
+                                                        .size(px(10.))
+                                                        .text_color(gpui::white()),
+                                                )
+                                            }),
+                                    )
+                                    .child(if primary {
+                                        "A"
+                                    } else if secondary {
+                                        "B"
+                                    } else {
+                                        "选择"
+                                    }),
+                            )
+                        })
                         .into_any_element(),
                     );
                 }
@@ -6258,6 +6462,41 @@ impl MainWindow {
             )
     }
 
+    fn cycle_secondary_display(&mut self, cx: &mut Context<Self>) {
+        let a = self
+            .selected_display
+            .as_ref()
+            .map(|display| display.id.clone())
+            .unwrap_or_else(|| scap_targets::Display::primary().id());
+        if self.selected_display.is_none() {
+            self.selected_display = self
+                .devices
+                .displays
+                .iter()
+                .find(|display| display.id == a)
+                .cloned();
+        }
+        let choices: Vec<_> = self
+            .devices
+            .displays
+            .iter()
+            .filter(|display| display.id != a)
+            .cloned()
+            .collect();
+        self.secondary_display = match &self.secondary_display {
+            None => choices.first().cloned(),
+            Some(current) => choices
+                .iter()
+                .position(|display| display.id == current.id)
+                .and_then(|index| choices.get(index + 1))
+                .cloned(),
+        };
+        if self.secondary_display.is_some() {
+            self.set_mode(Mode::Studio, cx);
+        }
+        cx.notify();
+    }
+
     fn render_targets(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
@@ -6292,6 +6531,30 @@ impl MainWindow {
                     .w_full()
                     .child(self.render_target_tile(TargetType::Area, cx))
                     .child(self.render_target_tile(TargetType::CameraOnly, cx)),
+            )
+            .when(
+                self.uses_display_multiselect(cx)
+                    && self.target == Some(TargetType::Display)
+                    && (self.devices.displays.len() > 1 || self.secondary_display.is_some()),
+                |view| {
+                    view.child(
+                        div()
+                            .id("secondary-display-picker")
+                            .p(px(8.))
+                            .rounded(px(8.))
+                            .text_size(px(11.))
+                            .text_color(self.theme.gray_11)
+                            .cursor_pointer()
+                            .child(if self.secondary_display.is_some() {
+                                "✓ 已选 2 个显示器（A + B）· 点击修改"
+                            } else {
+                                "选择显示器（可多选，最多 2 个）"
+                            })
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_panel(Panel::Target(TargetType::Display), window, cx);
+                            })),
+                    )
+                },
             )
     }
 
@@ -6459,11 +6722,21 @@ impl MainWindow {
                     self.render_device_row(
                         "camera-row",
                         "icons/camera.svg",
-                        self.camera
-                            .as_ref()
-                            .map(|camera| camera.label.clone())
-                            .unwrap_or_else(|| "不使用摄像头".into()),
-                        if self.camera.is_some()
+                        if self.target == Some(TargetType::Display)
+                            && self.secondary_display.is_some()
+                        {
+                            "双屏模式不使用摄像头".into()
+                        } else {
+                            self.camera
+                                .as_ref()
+                                .map(|camera| camera.label.clone())
+                                .unwrap_or_else(|| "不使用摄像头".into())
+                        },
+                        if self.target == Some(TargetType::Display)
+                            && self.secondary_display.is_some()
+                        {
+                            PillState::Off
+                        } else if self.camera.is_some()
                             && let Some(pill) = self.access_pill(OSPermission::Camera, cx)
                         {
                             pill
@@ -6487,7 +6760,11 @@ impl MainWindow {
                         // the way it already does for the display and window
                         // panels -- before the field was real there was nothing
                         // to focus into.
-                        if !this.enumerating && this.device_changes_allowed(cx) {
+                        if !this.enumerating
+                            && this.device_changes_allowed(cx)
+                            && !(this.target == Some(TargetType::Display)
+                                && this.secondary_display.is_some())
+                        {
                             this.open_panel(Panel::Device(DeviceMenu::Camera), window, cx);
                         }
                     })),

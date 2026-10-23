@@ -36,7 +36,7 @@ use crate::{
 /// `productName` in `tauri.conf.json`, which is what macOS renames the first
 /// submenu to and what the About/Hide/Quit labels interpolate.
 pub const APP_NAME: &str = if cfg!(feature = "local-chinese-trial") {
-    "Cap 中文试用版"
+    "Cap 双屏编辑增强版"
 } else {
     "Cap"
 };

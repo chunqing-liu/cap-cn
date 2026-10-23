@@ -2135,6 +2135,8 @@ impl Actor {
 }
 
 pub struct ActorBuilder {
+    #[cfg(windows)]
+    secondary_display: Option<screen_capture::ScreenCaptureTarget>,
     #[cfg(target_os = "linux")]
     lifetime: StudioLifetimeOwner,
     output_path: PathBuf,
@@ -2161,6 +2163,8 @@ impl ActorBuilder {
                 lifecycle: StudioLifecycle::new(),
                 armed: true,
             },
+            #[cfg(windows)]
+            secondary_display: None,
             output_path: output,
             capture_target,
             system_audio: false,
@@ -2176,6 +2180,12 @@ impl ActorBuilder {
             excluded_windows: Vec::new(),
             start_gate: None,
         }
+    }
+
+    #[cfg(windows)]
+    pub fn with_secondary_display(mut self, target: screen_capture::ScreenCaptureTarget) -> Self {
+        self.secondary_display = Some(target);
+        self
     }
 
     pub fn with_system_audio(mut self, system_audio: bool) -> Self {
@@ -2254,11 +2264,22 @@ impl ActorBuilder {
         {
             *lifecycle.0.runtime.lock().unwrap() = Some(tokio::runtime::Handle::current());
         }
+        #[cfg(windows)]
+        if let Some(secondary) = &self.secondary_display {
+            anyhow::ensure!(self.camera_feed.is_none(), "双屏模式不能同时录制摄像头");
+            anyhow::ensure!(
+                matches!((&self.capture_target, secondary),
+                (screen_capture::ScreenCaptureTarget::Display { id: a }, screen_capture::ScreenCaptureTarget::Display { id: b }) if a != b),
+                "双屏录制需要选择两台不同的显示器"
+            );
+        }
         let startup = spawn_studio_recording_actor(
             #[cfg(target_os = "linux")]
             self.lifetime,
             self.output_path,
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: self.secondary_display,
                 capture_target: self.capture_target,
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
@@ -2876,6 +2897,7 @@ async fn stop_recording(
                 name: None,
                 speed_audio_mode: None,
                 hide_cursor: None,
+                auto_zoom: None,
                 volume: None,
             })
         })
@@ -3488,7 +3510,43 @@ async fn create_segment_pipeline(
     };
 
     #[cfg(windows)]
-    let camera = if camera_only {
+    let camera = if let Some(target) = &base_inputs.secondary_display {
+        // The legacy secondary-video slot also carries display B; the project source marker distinguishes it from a webcam.
+        let (display, crop) =
+            target_to_display_and_crop(target).context("secondary display target")?;
+        let config = ScreenCaptureConfig::<ScreenCaptureMethod>::init(
+            display,
+            crop,
+            !custom_cursor_capture,
+            max_fps,
+            studio_max_capture_size(quality, false),
+            start_time.system_time(),
+            false,
+            crate::capture_pipeline::create_d3d_device()?,
+        )
+        .await
+        .context("显示器 B 初始化失败")?;
+        let info = config.info();
+        let output_size =
+            calculate_gpu_compatible_size(info.width, info.height, H264_MAX_DIMENSION);
+        let (source, _) = config.to_sources().await?;
+        Some(
+            ScreenCaptureMethod::make_studio_mode_pipeline(
+                source,
+                dir.join("camera.mp4"),
+                start_time,
+                start_gate.clone(),
+                segment_fragmented,
+                use_oop_muxer,
+                shared_pause_state.clone(),
+                output_size,
+                quality,
+                encoder_preferences.clone(),
+            )
+            .await
+            .context("显示器 B 录制管线启动失败")?,
+        )
+    } else if camera_only {
         None
     } else if let Some(camera_feed) = base_inputs.camera_feed {
         let pipeline = if segment_fragmented {
@@ -3612,10 +3670,15 @@ async fn create_segment_pipeline(
         None
     };
 
+    #[cfg(windows)]
+    let track_dual_cursor = base_inputs.secondary_display.is_some();
+    #[cfg(not(windows))]
+    let track_dual_cursor = false;
+    let record_cursor = custom_cursor_capture || track_dual_cursor;
     let cursor = if camera_only {
         None
     } else {
-        (custom_cursor_capture || keyboard_capture)
+        (record_cursor || keyboard_capture)
             .then(move || {
                 let cursor_crop_bounds = base_inputs
                     .capture_target
@@ -3624,7 +3687,7 @@ async fn create_segment_pipeline(
 
                 let cursor_output_path = dir.join("cursor.json");
                 let keyboard_output_path = dir.join(cap_project::KEYBOARD_EVENTS_FILE_NAME);
-                let incremental_output = if fragmented && custom_cursor_capture {
+                let incremental_output = if fragmented && record_cursor {
                     Some(cursor_output_path.clone())
                 } else {
                     None
@@ -3656,7 +3719,7 @@ async fn create_segment_pipeline(
                 );
 
                 Ok::<_, CreateSegmentPipelineError>(CursorPipeline {
-                    output_path: custom_cursor_capture.then_some(cursor_output_path),
+                    output_path: record_cursor.then_some(cursor_output_path),
                     keyboard_output_path: keyboard_capture.then_some(keyboard_output_path),
                     actor: cursor,
                 })
@@ -3972,6 +4035,8 @@ mod tests {
                     root.join("content/segments"),
                     root.join("content/cursors"),
                     RecordingBaseInputs {
+                        #[cfg(windows)]
+                        secondary_display: None,
                         capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                         capture_system_audio: false,
                         mic_feed: None,
@@ -4082,6 +4147,8 @@ mod tests {
             path.join("content/segments"),
             path.join("content/cursors"),
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: None,
                 capture_target: target.clone(),
                 capture_system_audio: false,
                 mic_feed: None,
@@ -4180,6 +4247,8 @@ mod tests {
             path.join("content/segments"),
             path.join("content/cursors"),
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: None,
                 capture_target: target.clone(),
                 capture_system_audio: false,
                 mic_feed: None,
@@ -4317,6 +4386,8 @@ mod tests {
                 path.join("content/segments"),
                 path.join("content/cursors"),
                 RecordingBaseInputs {
+                    #[cfg(windows)]
+                    secondary_display: None,
                     capture_target: target.clone(),
                     capture_system_audio: false,
                     mic_feed: None,
@@ -4561,6 +4632,8 @@ mod tests {
                 path.join("content/segments"),
                 path.join("content/cursors"),
                 RecordingBaseInputs {
+                    #[cfg(windows)]
+                    secondary_display: None,
                     capture_target: target.clone(),
                     capture_system_audio: false,
                     mic_feed: None,
@@ -6238,6 +6311,8 @@ mod tests {
             recording_dir.join("content/segments"),
             recording_dir.join("content/cursors"),
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: None,
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 capture_system_audio: false,
                 mic_feed: None,
@@ -6485,6 +6560,8 @@ mod windows_cancel_tests {
             PathBuf::new(),
             PathBuf::new(),
             RecordingBaseInputs {
+                #[cfg(windows)]
+                secondary_display: None,
                 capture_target: screen_capture::ScreenCaptureTarget::CameraOnly,
                 capture_system_audio: false,
                 mic_feed: None,

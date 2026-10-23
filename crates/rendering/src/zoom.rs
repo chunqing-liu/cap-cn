@@ -104,6 +104,16 @@ impl InterpolatedZoom {
     pub fn display_amount(&self) -> f64 {
         (self.bounds.bottom_right - self.bounds.top_left).x
     }
+
+    pub fn source_crop(&self) -> [f64; 4] {
+        let scale = self.display_amount().max(1.0);
+        [
+            -self.bounds.top_left.x / scale,
+            -self.bounds.top_left.y / scale,
+            (1.0 - self.bounds.top_left.x) / scale,
+            (1.0 - self.bounds.top_left.y) / scale,
+        ]
+    }
 }
 
 impl Default for InterpolatedZoom {
@@ -119,6 +129,23 @@ impl Default for InterpolatedZoom {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn source_crop_is_identity_at_rest() {
+        assert_eq!(
+            InterpolatedZoom::default().source_crop(),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn source_crop_keeps_manual_focus_within_one_display() {
+        let zoom = InterpolatedZoom {
+            t: 1.0,
+            bounds: SegmentBounds::from_amount_center(2.0, XY::new(1.0, 0.0)),
+        };
+        assert_eq!(zoom.source_crop(), [0.5, 0.0, 1.0, 0.5]);
+    }
 
     // The old easing-based tests (segment ramps, ensure_cursor_visible*) were
     // removed together with the state machine they exercised; the spring

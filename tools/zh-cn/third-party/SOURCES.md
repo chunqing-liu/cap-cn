@@ -4,7 +4,7 @@ Cap 中文版是基于 Cap 的非官方修改构建。Cap 的原始版权、AGPL
 
 ## 主程序与配套程序
 
-- 修改后的完整 Cap 源码：[chunqing-liu/cap-cn](https://github.com/chunqing-liu/cap-cn)，发布标签 `v0.6.1-cn.2`。
+- 修改后的完整 Cap 源码：[chunqing-liu/cap-cn](https://github.com/chunqing-liu/cap-cn)，稳定标签 `v0.6.1-cn.2`；双屏编辑增强预览标签 `v0.6.1-cn.2-dual-preview.1`。请按所用发行包选择对应源码。
 - 原始版本：[CapSoftware/Cap cap-v0.6.1](https://github.com/CapSoftware/Cap/tree/cap-v0.6.1)，提交 `cb12972577993e6051228a703af17e59564b9289`。
 - `Cap.exe` 遵循仓库根目录的许可；`cap-muxer.exe` 是相同官方版本的未修改配套程序，其源码在 `crates/cap-muxer` 与 `crates/cap-muxer-protocol`。
 - GPUI 源码来自 [wingleeio/zed](https://github.com/wingleeio/zed/tree/5d1f83d9f27a19bec1fb241dc33b42238af9cf8d)，完整修改在 `source-tools/gpui-local.patch`；GPUI 使用 Apache-2.0，Zed 仓库其他部分按各自许可处理。`prepare-gpui.ps1` 可获取并应用该补丁。
