@@ -10,9 +10,11 @@
 
 ### 双屏编辑增强预览版
 
-**[下载双屏编辑增强预览版](https://github.com/chunqing-liu/cap-cn/releases/tag/v0.6.1-cn.2-dual-preview.1)** · [功能、使用方法与验证范围](tools/zh-cn/releases/dual-preview.md)
+**[下载双屏编辑增强预览版 2](https://github.com/chunqing-liu/cap-cn/releases/tag/v0.6.1-cn.2-dual-preview.2)** · [本次更新与验证范围](tools/zh-cn/releases/dual-preview-2.md) · [双屏基础功能](tools/zh-cn/releases/dual-preview.md)
 
 在原中文版基础上新增双屏同时录制、单一画布导出、视频片段独立自动缩放及长时间轴导航，并修复双屏模式下原缩放轨道失效的问题。保留轨道的自动 / 手动模式、手动焦点和进出动画。
+
+预览版 2 新增逐段选择缩放目标“跟随鼠标 / 显示器 A / 显示器 B”、最高 **100 倍**片段变速与小数倍速输入，并修复加速片段预览画面不更新的问题。高倍速预览会降低取样帧率，解码较慢时可能缓冲；正式导出仍按所选倍率和帧率生成。
 
 这是独立的 Windows x64 **预览便携包**，不是替换稳定版的自动更新，也不包含新的安装程序。请解压到新目录，保存并退出旧版后再打开同一工程。尚未完成跨电脑、长时间双屏录制或所有原功能的完整验收；不要用于无法重录且没有备份的重要录屏。
 

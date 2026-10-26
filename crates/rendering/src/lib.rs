@@ -5214,6 +5214,7 @@ impl ProjectUniforms {
             segment_frames,
             cursor_events,
             zoom_timeline.sample(frame_time),
+            zoom_timeline.target_display_at(frame_time),
         );
         uniforms
     }
@@ -5224,6 +5225,7 @@ impl ProjectUniforms {
         frames: &DecodedSegmentFrames,
         cursor_events: &CursorEvents,
         track_zoom: InterpolatedZoom,
+        track_target: cap_project::ZoomTargetDisplay,
     ) {
         let Some(dual) = &self.project.dual_display else {
             return;
@@ -5241,12 +5243,13 @@ impl ProjectUniforms {
             let mut layer = layer.clone();
             layer.sanitize();
             let bounds = layer.fitted_bounds(output, source);
-            let crop = dual.zoom_crop_with_track(
+            let crop = dual.zoom_crop_with_targeted_track(
                 b,
                 cursor_events,
                 self.recording_time,
                 track_zoom.source_crop(),
                 track_zoom.t,
+                track_target,
             );
             CompositeVideoFrameUniforms {
                 crop_bounds: [

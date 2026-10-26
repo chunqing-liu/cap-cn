@@ -1036,6 +1036,8 @@ pub struct ZoomSegment {
     pub amount: f64,
     pub mode: ZoomMode,
     #[serde(default)]
+    pub target_display: ZoomTargetDisplay,
+    #[serde(default)]
     pub glide_direction: GlideDirection,
     #[serde(default = "ZoomSegment::default_glide_speed")]
     pub glide_speed: f64,
@@ -1060,6 +1062,15 @@ impl ZoomSegment {
 pub enum ZoomMode {
     Auto,
     Manual { x: f32, y: f32 },
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoomTargetDisplay {
+    #[default]
+    FollowCursor,
+    A,
+    B,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]

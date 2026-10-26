@@ -1541,6 +1541,7 @@ pub fn insert_zoom_segment(
             end,
             amount,
             mode: cap_project::ZoomMode::Auto,
+            target_display: Default::default(),
             glide_direction: Default::default(),
             glide_speed: 0.5,
             instant_animation: false,
@@ -2123,6 +2124,7 @@ pub fn generate_zoom_segments_from_clicks(
             end: end.round() / MS_PER_SECOND,
             amount: zoom_amount,
             mode: ZoomMode::Auto,
+            target_display: Default::default(),
             glide_direction: GlideDirection::None,
             glide_speed: 0.5,
             instant_animation: false,
@@ -2438,12 +2440,15 @@ fn lerp_vector_keyframe(
     }
 }
 
+pub const MIN_CLIP_TIMESCALE: f64 = 0.25;
+pub const MAX_CLIP_TIMESCALE: f64 = 100.0;
+
 pub fn set_clip_segment_timescale(
     timeline: &mut TimelineConfiguration,
     index: usize,
     timescale: f64,
 ) -> bool {
-    if !(0.25..=8.0).contains(&timescale) || !timescale.is_finite() {
+    if !(MIN_CLIP_TIMESCALE..=MAX_CLIP_TIMESCALE).contains(&timescale) {
         return false;
     }
     let Some(segment) = timeline.segments.get(index) else {
@@ -4224,6 +4229,61 @@ mod tests {
     }
 
     #[test]
+    fn high_clip_speeds_preserve_source_range_and_ripple_later_tracks() {
+        for speed in [8.0, 16.0, 25.0, 50.0, 75.5, 100.0] {
+            let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {
+                    "segments": [
+                        {"recordingSegment": 0, "start": 10.0, "end": 610.0, "timescale": 1.0},
+                        {"recordingSegment": 0, "start": 610.0, "end": 620.0, "timescale": 1.0}
+                    ],
+                    "zoomSegments": [
+                        {"start": 602.0, "end": 605.0, "amount": 2.0, "mode": "auto", "targetDisplay": "b"}
+                    ]
+                }
+            })).unwrap();
+            let timeline = project.timeline.as_mut().unwrap();
+            assert!(set_clip_segment_timescale(timeline, 0, speed));
+            assert_eq!(
+                (timeline.segments[0].start, timeline.segments[0].end),
+                (10.0, 610.0)
+            );
+            assert_eq!(timeline.segments[0].timescale, speed);
+            assert!((clip_timeline_duration(timeline) - (600.0 / speed + 10.0)).abs() < 0.00001);
+            assert!((timeline.zoom_segments[0].start - (600.0 / speed + 2.0)).abs() < 0.00001);
+            assert_eq!(
+                timeline.zoom_segments[0].target_display,
+                cap_project::ZoomTargetDisplay::B
+            );
+            assert_eq!(timeline.segments[1].timescale, 1.0);
+        }
+    }
+
+    #[test]
+    fn clip_speed_limits_reject_invalid_values_without_modifying_the_project() {
+        for speed in [
+            0.0,
+            0.249,
+            100.01,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {"segments": [{"start": 0.0, "end": 100.0, "timescale": 1.0}], "zoomSegments": []}
+            }))
+            .unwrap();
+            let before = serde_json::to_value(&project).unwrap();
+            assert!(!set_clip_segment_timescale(
+                project.timeline.as_mut().unwrap(),
+                0,
+                speed
+            ));
+            assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        }
+    }
+
+    #[test]
     fn setting_clip_timescale_ripples_later_tracks() {
         let mut project = zoom_fixture();
         let timeline = project.timeline.as_mut().unwrap();
@@ -4449,6 +4509,7 @@ mod tests {
             end: 14.0,
             amount: 1.5,
             mode: cap_project::ZoomMode::Auto,
+            target_display: Default::default(),
             glide_direction: Default::default(),
             glide_speed: 1.0,
             instant_animation: false,

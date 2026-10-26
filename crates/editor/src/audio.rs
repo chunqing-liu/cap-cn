@@ -715,7 +715,7 @@ impl AudioRenderer {
             || project.audio.mute
             || source.segment.speed_audio_mode.unwrap_or_default() == ClipSpeedAudioMode::Mute
             || !source.segment.timescale.is_finite()
-            || !(0.25..=8.0).contains(&source.segment.timescale)
+            || !(0.25..=100.0).contains(&source.segment.timescale)
         {
             return 0;
         }

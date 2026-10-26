@@ -4015,6 +4015,7 @@ mod tests {
             end: 18.0,
             amount: 1.5,
             mode: cap_project::ZoomMode::Auto,
+            target_display: Default::default(),
             glide_direction: Default::default(),
             glide_speed: 0.5,
             instant_animation: false,

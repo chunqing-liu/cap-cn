@@ -177,11 +177,22 @@ impl DualDisplayConfiguration {
     }
 
     pub fn cursor_source_position(&self, x: f64, y: f64) -> Option<XY<f64>> {
-        let (mut layer, position) = if let Some(position) = self.cursor_position(false, x, y) {
-            (self.a.clone(), position)
-        } else {
-            (self.b.clone(), self.cursor_position(true, x, y)?)
+        self.cursor_source_position_for_target(crate::ZoomTargetDisplay::FollowCursor, x, y)
+    }
+
+    pub fn cursor_source_position_for_target(
+        &self,
+        target: crate::ZoomTargetDisplay,
+        x: f64,
+        y: f64,
+    ) -> Option<XY<f64>> {
+        let b = match target {
+            crate::ZoomTargetDisplay::A => false,
+            crate::ZoomTargetDisplay::B => true,
+            crate::ZoomTargetDisplay::FollowCursor => self.cursor_position(false, x, y).is_none(),
         };
+        let position = self.cursor_position(b, x, y)?;
+        let mut layer = if b { self.b.clone() } else { self.a.clone() };
         layer.sanitize();
         if layer.hidden {
             return None;
@@ -217,6 +228,25 @@ impl DualDisplayConfiguration {
         track_crop: [f64; 4],
         activity: f64,
     ) -> [f64; 4] {
+        self.zoom_crop_with_targeted_track(
+            b,
+            events,
+            time,
+            track_crop,
+            activity,
+            crate::ZoomTargetDisplay::FollowCursor,
+        )
+    }
+
+    pub fn zoom_crop_with_targeted_track(
+        &self,
+        b: bool,
+        events: &crate::CursorEvents,
+        time: f64,
+        track_crop: [f64; 4],
+        activity: f64,
+        target: crate::ZoomTargetDisplay,
+    ) -> [f64; 4] {
         let mut layer = if b { self.b.clone() } else { self.a.clone() };
         layer.sanitize();
         let base = [
@@ -225,12 +255,26 @@ impl DualDisplayConfiguration {
             1.0 - layer.crop[2],
             1.0 - layer.crop[3],
         ];
-        if layer.hidden || self.current_cursor_position(b, events, time).is_none() {
+        if layer.hidden {
             return base;
         }
         let auto = self.zoom_crop(b, events, time);
         if !track_crop.iter().all(|value| value.is_finite()) || !activity.is_finite() {
             return auto;
+        }
+        let track_engaged = activity > 0.0001 || track_crop[2] - track_crop[0] < 0.9999;
+        if !track_engaged {
+            return auto;
+        }
+        let selected = match target {
+            crate::ZoomTargetDisplay::FollowCursor => {
+                self.current_cursor_position(b, events, time).is_some()
+            }
+            crate::ZoomTargetDisplay::A => !b,
+            crate::ZoomTargetDisplay::B => b,
+        };
+        if !selected {
+            return base;
         }
         let track_width = (track_crop[2] - track_crop[0]).clamp(1.0 / 16.0, 1.0);
         let track_amount = 1.0 / track_width;
@@ -832,6 +876,123 @@ mod tests {
                 .unwrap()
                 .canvas_size,
             XY::new(5120, 1440)
+        );
+    }
+
+    #[test]
+    fn fixed_track_target_overrides_the_cursor_and_suppresses_other_auto_zoom() {
+        for enabled in [false, true] {
+            let mut config = tracked_project();
+            config.auto_zoom.enabled = enabled;
+            for (target, selected_b, events) in [
+                (
+                    crate::ZoomTargetDisplay::A,
+                    false,
+                    moves(&[(0.0, -0.2, 0.75)]),
+                ),
+                (
+                    crate::ZoomTargetDisplay::B,
+                    true,
+                    moves(&[(0.0, 0.15, 0.2)]),
+                ),
+            ] {
+                for activity in [0.2, 1.0] {
+                    let track = [0.0, 0.0, 0.5, 0.5];
+                    assert_eq!(
+                        config.zoom_crop_with_targeted_track(
+                            selected_b, &events, 1.0, track, activity, target
+                        ),
+                        track
+                    );
+                    assert_eq!(
+                        config.zoom_crop_with_targeted_track(
+                            !selected_b,
+                            &events,
+                            1.0,
+                            track,
+                            activity,
+                            target
+                        ),
+                        [0.0, 0.0, 1.0, 1.0]
+                    );
+                }
+                assert_eq!(
+                    config.zoom_crop_with_targeted_track(
+                        !selected_b,
+                        &events,
+                        1.0,
+                        [0.0, 0.0, 1.0, 1.0],
+                        0.0,
+                        target
+                    ),
+                    config.zoom_crop(!selected_b, &events, 1.0)
+                );
+                assert_eq!(
+                    config.zoom_crop_with_targeted_track(
+                        !selected_b,
+                        &events,
+                        1.0,
+                        [0.0, 0.0, 1.0, 1.0],
+                        1.0,
+                        target
+                    ),
+                    [0.0, 0.0, 1.0, 1.0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_manual_target_works_without_cursor_capture_and_preserves_static_crop() {
+        let mut config = tracked_project();
+        config.b.crop = [0.1, 0.1, 0.2, 0.2];
+        let events = crate::CursorEvents::default();
+        let crop = config.zoom_crop_with_targeted_track(
+            true,
+            &events,
+            1.0,
+            [0.5, 0.5, 1.0, 1.0],
+            1.0,
+            crate::ZoomTargetDisplay::B,
+        );
+        for (actual, expected) in crop.into_iter().zip([0.45, 0.45, 0.8, 0.8]) {
+            assert!((actual - expected).abs() < 0.00001);
+        }
+        assert_eq!(
+            config.zoom_crop_with_targeted_track(
+                false,
+                &events,
+                1.0,
+                [0.5, 0.5, 1.0, 1.0],
+                1.0,
+                crate::ZoomTargetDisplay::B
+            ),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn zoom_target_defaults_to_cursor_and_survives_independent_clone_and_save() {
+        let legacy: crate::ZoomSegment =
+            serde_json::from_str(r#"{"start":1,"end":5,"amount":2,"mode":"auto"}"#).unwrap();
+        assert_eq!(
+            legacy.target_display,
+            crate::ZoomTargetDisplay::FollowCursor
+        );
+        let mut left = legacy.clone();
+        let mut right = legacy.clone();
+        left.end = 3.0;
+        left.target_display = crate::ZoomTargetDisplay::A;
+        right.start = 3.0;
+        right.target_display = crate::ZoomTargetDisplay::B;
+        for segment in [left, right] {
+            let restored: crate::ZoomSegment =
+                serde_json::from_slice(&serde_json::to_vec(&segment).unwrap()).unwrap();
+            assert_eq!(segment, restored);
+        }
+        assert_eq!(
+            legacy.target_display,
+            crate::ZoomTargetDisplay::FollowCursor
         );
     }
 

@@ -26,7 +26,8 @@ use cap_project::{
     AudioTrackSegment, Camera3DBlur, Camera3DBlurMode, Camera3DKeyframe, Camera3DProperties,
     Camera3DSegment, CaptionTrackSegment, KeyboardTrackSegment, MaskKind, MaskSegment, SceneMode,
     SceneSegment, SplitLayout, TextAlign, TextAnimation, TextBackgroundStyle, TextLayout,
-    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, mask_effect_contract,
+    TextSegment, TimelineConfiguration, XY, ZoomMode, ZoomSegment, ZoomTargetDisplay,
+    mask_effect_contract,
 };
 use gpui::{
     AnyElement, AppContext, Context, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
@@ -2528,6 +2529,7 @@ pub enum PanelSlider {
 /// Window` and the sidebar's render chain is threaded with `&self`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FieldKey {
+    ClipSpeed(usize),
     DualZoomDuration,
     DualZoomAmount,
     ClipZoomAmount(usize),
@@ -2663,6 +2665,9 @@ impl EditorWindow {
         }
         let timeline = self.project.timeline.as_ref()?;
         Some(match key {
+            FieldKey::ClipSpeed(index) => {
+                ui::format_number(timeline.segments.get(index)?.timescale)
+            }
             FieldKey::ClipZoomAmount(index) => {
                 ui::format_number(self.clip_auto_zoom(index)?.amount)
             }
@@ -2822,6 +2827,25 @@ impl EditorWindow {
         };
         let text = input.read(cx).text().to_string();
         match key {
+            FieldKey::ClipSpeed(index) => {
+                if !final_commit {
+                    return;
+                }
+                if let Some(value) = ui::parse_number(&text).filter(|value| value.is_finite()) {
+                    self.set_clip_timescale(
+                        index,
+                        value.clamp(
+                            crate::editor_edits::MIN_CLIP_TIMESCALE,
+                            crate::editor_edits::MAX_CLIP_TIMESCALE,
+                        ),
+                        window,
+                        cx,
+                    );
+                }
+                if let Some(value) = self.field_value(key) {
+                    input.update(cx, |input, cx| input.set_text(value, cx));
+                }
+            }
             FieldKey::ClipZoomAmount(index) | FieldKey::ClipZoomDuration(index) => {
                 if !final_commit {
                     return;
@@ -4201,6 +4225,13 @@ impl EditorWindow {
             .flex_col()
             .gap(px(14.))
             .children(dual.then(|| {
+                let target = self
+                    .timeline()
+                    .and_then(|timeline| timeline.zoom_segments.get(index))
+                    .map(|segment| segment.target_display);
+                self.zoom_target_tabs(vec![index], target, cx)
+            }))
+            .children(dual.then(|| {
                 div()
                 .flex()
                 .flex_col()
@@ -4216,7 +4247,7 @@ impl EditorWindow {
                 ))
                 .child(
                     div().text_size(px(11.)).text_color(theme.gray_11)
-                        .child("支持 1.00–4.50×。任何缩放都只作用于录像中鼠标所在的显示器，另一屏保持不变。轨道优先于片段自动缩放；手动焦点使用当前显示器内的相对位置。"),
+                        .child("支持 1.00–4.50×。选择 A 或 B 可固定缩放目标，不受鼠标换屏影响，另一屏保持不变。轨道优先于片段自动缩放；手动焦点是目标屏幕内的相对位置。"),
                 )
                 .into_any_element()
             }))
@@ -4304,6 +4335,12 @@ impl EditorWindow {
             .flex()
             .flex_col()
             .gap(px(16.))
+            .children(self.project.dual_display.is_some().then(|| {
+                let shared = segments.first().map(|segment| segment.target_display).filter(|target| {
+                    segments.iter().all(|segment| segment.target_display == *target)
+                });
+                self.zoom_target_tabs(indices.to_vec(), shared, cx)
+            }))
             .child(
                 // `<div class="flex flex-col gap-6 p-4 rounded-lg border border-gray-200">`
                 div()
@@ -4413,6 +4450,76 @@ impl EditorWindow {
                     })),
             )
             .into_any_element()
+    }
+
+    fn zoom_target_tabs(
+        &self,
+        indices: Vec<usize>,
+        selected: Option<ZoomTargetDisplay>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let mut tabs = div()
+            .flex()
+            .flex_row()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(Hsla::from(theme.gray_8))
+            .p(px(2.));
+        for (target, label, id) in [
+            (
+                ZoomTargetDisplay::FollowCursor,
+                "跟随鼠标",
+                "zoom-target-follow",
+            ),
+            (ZoomTargetDisplay::A, "显示器 A", "zoom-target-a"),
+            (ZoomTargetDisplay::B, "显示器 B", "zoom-target-b"),
+        ] {
+            let indices = indices.clone();
+            tabs = tabs.child(
+                div()
+                    .id(id)
+                    .flex_1()
+                    .flex()
+                    .justify_center()
+                    .py(px(10.))
+                    .rounded(px(6.))
+                    .text_size(px(12.))
+                    .text_color(Hsla::from(theme.gray_12))
+                    .when(selected == Some(target), |tab| {
+                        tab.bg(Hsla::from(theme.gray_5))
+                    })
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        let indices = indices.clone();
+                        this.edit_project("zoom-target", window, cx, move |project| {
+                            let Some(timeline) = project.timeline.as_mut() else {
+                                return false;
+                            };
+                            let mut changed = false;
+                            for index in indices {
+                                if let Some(segment) = timeline.zoom_segments.get_mut(index)
+                                    && segment.target_display != target
+                                {
+                                    segment.target_display = target;
+                                    changed = true;
+                                }
+                            }
+                            changed
+                        });
+                    })),
+            );
+        }
+        ui::Field::section(
+            &theme,
+            if selected.is_some() {
+                "目标显示器"
+            } else {
+                "目标显示器（混合）"
+            },
+        )
+        .child(tabs)
+        .into_any_element()
     }
 
     /// The Auto / Manual tab strip (`:5619-5645`). Auto is disabled without

@@ -27,7 +27,7 @@
 
 use cap_project::{
     Crop, CursorEvents, ProjectConfiguration, ScreenMovementSpring, TimelineConfiguration, XY,
-    ZoomMode, ZoomSegment,
+    ZoomMode, ZoomSegment, ZoomTargetDisplay,
 };
 
 use crate::{
@@ -609,6 +609,7 @@ struct TimelineSample {
     center: XY<f32>,
     activity: f32,
     snapped: bool,
+    target_display: ZoomTargetDisplay,
 }
 
 struct PrecomputeState {
@@ -728,6 +729,7 @@ impl ZoomTransformTimeline {
                 recording_clip: None,
                 prefer_outgoing: false,
             },
+            None,
         )
     }
 
@@ -739,6 +741,7 @@ impl ZoomTransformTimeline {
         duration_secs: f64,
         crops: CursorCropMaps,
         selection: RecordingClipSelection,
+        dual: Option<&cap_project::DualDisplayConfiguration>,
     ) -> Self {
         let RecordingClipSelection {
             recording_clip,
@@ -759,6 +762,41 @@ impl ZoomTransformTimeline {
         } else {
             build_time_map(timeline)
         };
+        let source_cursors: Vec<_> = dual
+            .map(|dual| {
+                [
+                    ZoomTargetDisplay::FollowCursor,
+                    ZoomTargetDisplay::A,
+                    ZoomTargetDisplay::B,
+                ]
+                .into_iter()
+                .filter(|target| {
+                    zoom_segments.iter().any(|segment| {
+                        segment.target_display == *target && matches!(segment.mode, ZoomMode::Auto)
+                    })
+                })
+                .map(|target| {
+                    let events = CursorEvents {
+                        moves: cursor_events
+                            .moves
+                            .iter()
+                            .filter_map(|event| {
+                                let position = dual
+                                    .cursor_source_position_for_target(target, event.x, event.y)?;
+                                Some(cap_project::CursorMoveEvent {
+                                    x: position.x,
+                                    y: position.y,
+                                    ..event.clone()
+                                })
+                            })
+                            .collect(),
+                        clicks: Vec::new(),
+                    };
+                    (target, events)
+                })
+                .collect()
+            })
+            .unwrap_or_default();
         let clusters = zoom_segments
             .iter()
             .map(|segment| match segment.mode {
@@ -776,6 +814,10 @@ impl ZoomTransformTimeline {
                         prefer_outgoing,
                     )
                     .max(recording_start);
+                    let cursor_events = source_cursors
+                        .iter()
+                        .find(|(target, _)| *target == segment.target_display)
+                        .map_or(cursor_events, |(_, events)| events);
                     Some(ZoomClusters::new(
                         cursor_events,
                         moves_time_ordered,
@@ -850,6 +892,12 @@ impl ZoomTransformTimeline {
             ),
             activity: initial.activity.clamp(0.0, 1.0),
             snapped: false,
+            target_display: timeline
+                .segment_index
+                .active_at(0.0)
+                .map_or(ZoomTargetDisplay::FollowCursor, |index| {
+                    timeline.zoom_segments[index].target_display
+                }),
         });
         timeline.state = Some(PrecomputeState {
             center_sim,
@@ -956,33 +1004,6 @@ impl ZoomTransformTimeline {
         recording_clip: Option<u32>,
         prefer_outgoing: bool,
     ) -> Self {
-        let source_cursor = project
-            .dual_display
-            .as_ref()
-            .filter(|_| {
-                project.timeline.as_ref().is_some_and(|timeline| {
-                    timeline
-                        .zoom_segments
-                        .iter()
-                        .any(|segment| matches!(segment.mode, ZoomMode::Auto))
-                })
-            })
-            .map(|dual| CursorEvents {
-                moves: cursor_events
-                    .moves
-                    .iter()
-                    .filter_map(|event| {
-                        let position = dual.cursor_source_position(event.x, event.y)?;
-                        Some(cap_project::CursorMoveEvent {
-                            x: position.x,
-                            y: position.y,
-                            ..event.clone()
-                        })
-                    })
-                    .collect(),
-                clicks: Vec::new(),
-            });
-        let cursor_events = source_cursor.as_ref().unwrap_or(cursor_events);
         Self::new_for_recording_clip(
             project
                 .timeline
@@ -998,6 +1019,7 @@ impl ZoomTransformTimeline {
                 recording_clip,
                 prefer_outgoing,
             },
+            project.dual_display.as_ref(),
         )
     }
 
@@ -1059,6 +1081,15 @@ impl ZoomTransformTimeline {
         }
     }
 
+    pub fn target_display_at(&self, timeline_secs: f32) -> ZoomTargetDisplay {
+        let Some(last) = self.samples.len().checked_sub(1) else {
+            return ZoomTargetDisplay::FollowCursor;
+        };
+        let pos = f64::from(timeline_secs).max(0.0) * 1000.0 / STEP_MS;
+        let index = (pos.ceil() as usize).min(last);
+        self.samples[index].target_display
+    }
+
     /// Whether any precomputed step in `[from_secs, to_secs]` was an instant
     /// snap (no spring). Motion-effect consumers can use this to suppress
     /// velocity-derived effects across intentional discontinuities.
@@ -1083,6 +1114,16 @@ impl ZoomTransformTimeline {
         let step_index = self.samples.len();
         let step_secs = step_index as f64 * STEP_MS / 1000.0;
         let targets = self.targets_at(step_secs, held_center);
+        let target_display = self.segment_index.active_at(step_secs).map_or_else(
+            || {
+                self.samples
+                    .last()
+                    .map_or(ZoomTargetDisplay::FollowCursor, |sample| {
+                        sample.target_display
+                    })
+            },
+            |index| self.zoom_segments[index].target_display,
+        );
 
         let Some(state) = self.state.as_mut() else {
             return;
@@ -1141,6 +1182,7 @@ impl ZoomTransformTimeline {
             ),
             activity: state.aux_sim.position.y.clamp(0.0, 1.0),
             snapped: targets.snap,
+            target_display,
         });
 
         if self.samples.len() >= self.total_samples {
@@ -1213,6 +1255,85 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixed_targets_filter_auto_focus_and_keep_target_during_spring_out() {
+        let mut a = auto_segment(0.5, 2.0, 2.0);
+        a.target_display = ZoomTargetDisplay::A;
+        let mut b = auto_segment(3.0, 5.0, 2.0);
+        b.target_display = ZoomTargetDisplay::B;
+        let project = ProjectConfiguration {
+            dual_display: Some(cap_project::DualDisplayConfiguration {
+                cursor_map: Some(cap_project::DualDisplayCursorMap {
+                    b_origin: XY::new(-1.0, 0.0),
+                    b_size: XY::new(1.0, 1.0),
+                }),
+                ..Default::default()
+            }),
+            ..project_with_crop_styles(vec![a, b], Vec::new())
+        };
+        let cursor = CursorEvents {
+            moves: vec![
+                move_event(0.0, 0.1, 0.1),
+                move_event(100.0, -0.1, 0.9),
+                move_event(2500.0, 0.2, 0.2),
+            ],
+            ..Default::default()
+        };
+        let mut timeline =
+            ZoomTransformTimeline::from_project(&project, &cursor, 6.0, XY::new(2560, 1440));
+        timeline.precompute();
+        assert_eq!(
+            timeline.target_display_at(0.0),
+            ZoomTargetDisplay::FollowCursor
+        );
+        for time in [1.5, 2.05, 2.2] {
+            assert_eq!(timeline.target_display_at(time), ZoomTargetDisplay::A);
+            let zoom = timeline.sample(time);
+            assert!(zoom.t > 0.0);
+            assert!(zoom.source_crop()[0] < 0.01);
+        }
+        for time in [4.0, 5.05, 5.2] {
+            assert_eq!(timeline.target_display_at(time), ZoomTargetDisplay::B);
+            let zoom = timeline.sample(time);
+            assert!(zoom.t > 0.0);
+            assert!(zoom.source_crop()[0] > 0.01);
+        }
+        let mut changed = project.clone();
+        changed.timeline.as_mut().unwrap().zoom_segments[0].target_display = ZoomTargetDisplay::B;
+        assert!(!ZoomTransformTimeline::project_inputs_match(
+            &project,
+            &changed,
+            XY::new(2560, 1440)
+        ));
+    }
+
+    #[test]
+    fn fixed_target_auto_without_matching_cursor_uses_center_not_other_screen() {
+        let mut segment = auto_segment(0.5, 4.0, 2.0);
+        segment.target_display = ZoomTargetDisplay::B;
+        let project = ProjectConfiguration {
+            dual_display: Some(cap_project::DualDisplayConfiguration {
+                cursor_map: Some(cap_project::DualDisplayCursorMap {
+                    b_origin: XY::new(-1.0, 0.0),
+                    b_size: XY::new(1.0, 1.0),
+                }),
+                ..Default::default()
+            }),
+            ..project_with_crop_styles(vec![segment], Vec::new())
+        };
+        let cursor = CursorEvents {
+            moves: vec![move_event(0.0, 0.05, 0.05)],
+            ..Default::default()
+        };
+        let mut timeline =
+            ZoomTransformTimeline::from_project(&project, &cursor, 4.0, XY::new(2560, 1440));
+        timeline.precompute();
+        let zoom = timeline.sample(2.0);
+        assert_eq!(timeline.target_display_at(2.0), ZoomTargetDisplay::B);
+        assert!((zoom.source_crop()[0] - 0.25).abs() < 0.001);
+        assert!((zoom.source_crop()[1] - 0.25).abs() < 0.001);
+    }
+
+    #[test]
     fn dual_zoom_track_auto_mode_uses_display_b_local_coordinates() {
         let project = ProjectConfiguration {
             dual_display: Some(cap_project::DualDisplayConfiguration {
@@ -1251,6 +1372,7 @@ mod tests {
                 x: x as f32,
                 y: y as f32,
             },
+            target_display: Default::default(),
             glide_direction: GlideDirection::default(),
             glide_speed: 0.5,
             instant_animation: false,

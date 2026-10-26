@@ -1692,7 +1692,7 @@ fn add_track_tile_progress(delta: f32, index: usize) -> f32 {
 const CLIP_MENU_WIDTH: f32 = 300.;
 /// Roughly the menu's laid-out height; only decides which side of its anchor
 /// the card opens on.
-const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 440.;
+const CLIP_MENU_HEIGHT_ESTIMATE: f32 = 520.;
 
 /// The clip settings menu (`ClipSettingsControl`, `TL/ClipTrack.tsx`), opened
 /// from the clip's cog or by right-clicking the clip.
@@ -7911,6 +7911,7 @@ impl EditorWindow {
             "clip menu opened"
         );
         self.clip_speed = Some(menu);
+        self.ensure_field(crate::editor_panels::FieldKey::ClipSpeed(index), window, cx);
         cx.notify();
     }
 
@@ -8018,7 +8019,7 @@ impl EditorWindow {
         self.open_clip_menu_at(index, event.position, window, cx);
     }
 
-    fn set_clip_timescale(
+    pub(crate) fn set_clip_timescale(
         &mut self,
         index: usize,
         timescale: f64,
@@ -8269,7 +8270,10 @@ impl EditorWindow {
             .rename_in_progress()
             .filter(|(editing, _)| *editing == index)
             .map(|(_, input)| input);
-        let speeds = [0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
+        let speeds = [
+            vec![0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 8.0],
+            vec![10.0, 16.0, 25.0, 50.0, 100.0],
+        ];
         let audio_modes = [
             (ClipSpeedAudioMode::Mute, "静音"),
             (ClipSpeedAudioMode::MaintainPitch, "保持音高"),
@@ -8368,19 +8372,28 @@ impl EditorWindow {
                     .flex_col()
                     .gap(px(4.))
                     .child(clip_menu_section(&theme, "速度"))
-                    .child(chip_row().children(speeds.into_iter().map(|speed| {
-                        let selected = (timescale - speed).abs() < 1e-6;
-                        chip(
-                            SharedString::from(format!("clip-speed-{speed}")),
-                            selected,
-                            format_clip_speed(speed),
-                        )
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.set_clip_timescale(index, speed, window, cx);
-                            },
-                        ))
-                    }))),
+                    .children(speeds.into_iter().map(|row| {
+                        chip_row().children(row.into_iter().map(|speed| {
+                            let selected = (timescale - speed).abs() < 1e-6;
+                            chip(
+                                SharedString::from(format!("clip-speed-{speed}")),
+                                selected,
+                                format_clip_speed(speed),
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.set_clip_timescale(index, speed, window, cx);
+                                },
+                            ))
+                        }))
+                    }))
+                    .child(ui::Field::inline(&theme, "自定义倍速").value(
+                        self.render_number_field(
+                            crate::editor_panels::FieldKey::ClipSpeed(index),
+                            "×",
+                            100.,
+                        ),
+                    )),
             )
             .child(
                 div()

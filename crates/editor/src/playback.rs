@@ -262,6 +262,43 @@ fn should_reset_prefetch(
         || (requested_frame < next_frame && !has_in_flight)
 }
 
+fn accelerated_preview(project: &ProjectConfiguration, frame: u32, fps: u32) -> bool {
+    project
+        .get_segment_time(f64::from(frame) / f64::from(fps))
+        .is_some_and(|(_, segment)| segment.timescale > 1.0)
+}
+
+fn next_preview_frame(project: &ProjectConfiguration, frame: u32, fps: u32) -> u32 {
+    let next = frame.saturating_add(1);
+    let time = f64::from(frame) / f64::from(fps);
+    let Some((_, segment)) = project.get_segment_time(time) else {
+        return next;
+    };
+    if !segment.timescale.is_finite() || segment.timescale <= 2.0 {
+        return next;
+    }
+    let preview_fps =
+        (120.0 / segment.timescale).clamp(5.0_f64.min(f64::from(fps)), f64::from(fps));
+    let stride = (f64::from(fps) / preview_fps).ceil() as u32;
+    let target = frame.saturating_add(stride);
+    for candidate in frame..=target {
+        let time = f64::from(candidate) / f64::from(fps);
+        if project
+            .get_segment_time(time)
+            .is_none_or(|(_, other)| !std::ptr::eq(segment, other))
+            || project.timeline.as_ref().is_some_and(|timeline| {
+                matches!(
+                    timeline.get_frame_mapping(time),
+                    Some(TimelineFrameMapping::Transition { .. })
+                )
+            })
+        {
+            return candidate.max(next);
+        }
+    }
+    target.max(next)
+}
+
 type CachedTransition = (Arc<DecodedSegmentFrames>, u32, ClipTransitionType, f32);
 type CachedFrame = (Arc<DecodedSegmentFrames>, u32, Option<CachedTransition>);
 
@@ -737,7 +774,10 @@ impl Playback {
 
                         let reset_distance =
                             producer_prefetch_frame_limit.load(Ordering::Relaxed).max(2) as u32 / 2;
-                        if generation_changed || is_backward_seek || seek_distance > reset_distance
+                        if generation_changed
+                            || is_backward_seek
+                            || (seek_distance > reset_distance
+                                && !accelerated_preview(&cached_project, requested, fps))
                         {
                             in_flight = FuturesUnordered::new();
                         }
@@ -851,7 +891,7 @@ impl Playback {
                         })));
                     }
 
-                    next_prefetch_frame += 1;
+                    next_prefetch_frame = next_preview_frame(&cached_project, frame_num, fps);
                 }
 
                 tokio::select! {
@@ -1272,7 +1312,7 @@ impl Playback {
 
                         total_frames_rendered += 1;
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-                        frame_number = frame_number.saturating_add(1);
+                        frame_number = next_preview_frame(&cached_project, frame_number, fps);
                         let _ = playback_position_tx.send(frame_number);
                     }
                 }
@@ -1507,7 +1547,12 @@ impl Playback {
                 } else {
                     Instant::now().saturating_duration_since(next_deadline)
                 };
-                if adopted.is_none() && overshoot > frame_duration + frame_duration / 2 {
+                let accelerated =
+                    adopted.is_none() && accelerated_preview(&cached_project, frame_number, fps);
+                if adopted.is_none()
+                    && !accelerated
+                    && overshoot > frame_duration + frame_duration / 2
+                {
                     let frames_behind = (overshoot.as_secs_f64() * fps_f64).floor() as u32;
                     let skip = frames_behind.max(1);
                     let skipped_from = frame_number;
@@ -1577,11 +1622,23 @@ impl Playback {
                     was_cached = true;
                     cache_hits += 1;
                     Some(cached)
-                } else if adopted.is_some() {
+                } else if adopted.is_some() || accelerated {
                     let mut exact = prefetch_buffer
                         .iter()
                         .position(|frame| frame.frame_number == frame_number)
                         .and_then(|index| prefetch_buffer.remove(index));
+                    if accelerated
+                        && exact.is_none()
+                        && let Some(index) = prefetch_buffer.iter().position(|frame| {
+                            frame.frame_number > frame_number
+                                && frame.frame_number
+                                    <= next_preview_frame(&cached_project, frame_number, fps)
+                        })
+                    {
+                        let frame = prefetch_buffer.remove(index).unwrap();
+                        frame_number = frame.frame_number;
+                        exact = Some(frame);
+                    }
                     if exact.is_none() {
                         let _ = frame_request_tx.send((seek_generation, frame_number));
                         match receive_prefetched_frame(
@@ -1598,8 +1655,16 @@ impl Playback {
                         }
                     }
                     let Some(frame) = exact else {
+                        if accelerated {
+                            // Keep the decode alive and move the clock by the buffering time.
+                            // Repeated catch-up cancellation otherwise starves an entire sped-up clip.
+                            start += frame_acquire_start.elapsed();
+                        }
                         continue;
                     };
+                    if accelerated {
+                        start += frame_acquire_start.elapsed();
+                    }
                     frame_source = PlaybackFrameSource::PrefetchWaitExact;
                     Some(frame.into_cached())
                 } else if prefetch_buffer
@@ -1973,7 +2038,7 @@ impl Playback {
                     continue;
                 }
 
-                frame_number = frame_number.saturating_add(1);
+                frame_number = next_preview_frame(&cached_project, frame_number, fps);
                 let _ = playback_position_tx.send(frame_number);
                 if has_audio
                     && audio_playhead_tx
@@ -1986,7 +2051,7 @@ impl Playback {
                 let expected_frame =
                     clock_anchor_frame + (start.elapsed().as_secs_f64() * fps_f64).floor() as u32;
 
-                if frame_number < expected_frame {
+                if !accelerated && frame_number < expected_frame {
                     let frames_behind = expected_frame - frame_number;
 
                     if frames_behind <= 2 {
@@ -2092,6 +2157,51 @@ impl PlaybackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accelerated_preview_sampling_stops_at_clip_boundaries_and_restores_normal_frames() {
+        for speed in [1.0, 2.0, 8.0, 25.0, 50.0, 100.0] {
+            let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+                "timeline": {"segments": [
+                    {"start": 0.0, "end": speed * 2.025, "timescale": speed},
+                    {"start": 300.0, "end": 304.0, "timescale": 1.0}
+                ], "zoomSegments": []}
+            }))
+            .unwrap();
+            let mut frame = 0;
+            while frame < 122 {
+                let next = next_preview_frame(&project, frame, 60);
+                assert!(next > frame);
+                assert!(next - frame <= 12);
+                if frame < 122 {
+                    assert!(next <= 122);
+                }
+                frame = next;
+            }
+            assert_eq!(frame, 122);
+            for frame in 122..180 {
+                assert_eq!(next_preview_frame(&project, frame, 60), frame + 1);
+                assert!(!accelerated_preview(&project, frame, 60));
+            }
+        }
+    }
+
+    #[test]
+    fn accelerated_preview_seeks_keep_the_new_frame_grid_and_low_fps_is_valid() {
+        let project: ProjectConfiguration = serde_json::from_value(serde_json::json!({
+            "timeline": {"segments": [
+                {"start": 0.0, "end": 1000.0, "timescale": 100.0}
+            ], "zoomSegments": []}
+        }))
+        .unwrap();
+        for fps in [1, 5, 15, 30, 60, 120] {
+            for frame in [0, 1, 7, 19] {
+                let next = next_preview_frame(&project, frame, fps);
+                assert!(next > frame);
+                assert!(next - frame <= (fps / 5).max(1));
+            }
+        }
+    }
 
     #[test]
     fn source_audio_offset_edits_refresh_playback_for_the_recording_clip() {

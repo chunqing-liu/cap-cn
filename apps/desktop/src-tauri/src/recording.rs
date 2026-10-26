@@ -6435,6 +6435,7 @@ fn generate_zoom_segments_from_clicks_impl(
             end: end.round() / MS_PER_SECOND,
             amount: zoom_amount,
             mode: ZoomMode::Auto,
+            target_display: Default::default(),
             glide_direction: GlideDirection::None,
             glide_speed: 0.5,
             instant_animation: false,
