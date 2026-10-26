@@ -1735,14 +1735,21 @@ impl MainWindow {
         let request = app_windows::OverlayRequest {
             mode,
             recording_mode: self.effective_mode(cx),
-            // A display picked from the dropdown narrows the overlays to that
-            // display; otherwise every display gets one.
             display: match mode {
                 TargetType::Display => self
                     .selected_display
                     .as_ref()
                     .map(|display| display.id.clone()),
                 _ => None,
+            },
+            secondary_display: if mode == TargetType::Display
+                && self.effective_mode(cx) == Mode::Studio
+            {
+                self.secondary_display
+                    .as_ref()
+                    .map(|display| display.id.clone())
+            } else {
+                None
             },
             pinned_window: match mode {
                 TargetType::Window => self
@@ -4031,14 +4038,26 @@ impl MainWindow {
                                     + usize::from(self.secondary_display.is_some())
                             ))
                             .full_width()
+                            .disabled(self.selected_display.is_none())
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_panel(cx);
-                                this.sync_overlays(cx);
+                                this.finish_display_selection(cx);
                             })),
                         ),
                     )
                 },
             )
+    }
+
+    fn finish_display_selection(&mut self, cx: &mut Context<Self>) {
+        self.close_panel(cx);
+        if self.selected_display.is_none() {
+            return;
+        }
+        self.target = Some(TargetType::Display);
+        if self.secondary_display.is_some() {
+            self.set_mode(Mode::Studio, cx);
+        }
+        self.sync_overlays(cx);
     }
 
     fn close_panel(&mut self, cx: &mut Context<Self>) {
@@ -4067,9 +4086,10 @@ impl MainWindow {
         } else {
             let sync_displays = matches!(self.panel, Some(Panel::Target(TargetType::Display)))
                 && self.uses_display_multiselect(cx);
-            self.close_panel(cx);
             if sync_displays {
-                self.sync_overlays(cx);
+                self.finish_display_selection(cx);
+            } else {
+                self.close_panel(cx);
             }
         }
     }

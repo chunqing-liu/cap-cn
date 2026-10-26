@@ -1835,6 +1835,7 @@ pub struct OverlayRequest {
     /// display picked from the main window's dropdown, or the display the
     /// picked window lives on.
     pub display: Option<DisplayId>,
+    pub secondary_display: Option<DisplayId>,
     /// A window picked in the main window: the overlay pins its highlight to
     /// that window instead of following the cursor, the way the Tauri poll
     /// substitutes `focused_target`'s window for `get_topmost_at_cursor`.
@@ -1864,6 +1865,14 @@ pub(crate) fn reject_unavailable_window(cx: &mut App) {
     });
 }
 
+fn reject_unavailable_display(cx: &mut App) {
+    dismiss_target_overlays(cx);
+    RecordingSession::global(cx).update(cx, |session, cx| {
+        session.error = Some("所选显示器或录制确认窗口不可用，请重新选择。未开始录制。".into());
+        cx.notify();
+    });
+}
+
 /// Open (or re-target) the fullscreen overlays.
 ///
 /// A mode change tears the old windows down first: the overlay carries
@@ -1875,8 +1884,13 @@ pub fn open_target_overlays(request: OverlayRequest, cx: &mut App) {
     if defer_window_until_capture_safe(cx) {
         return;
     }
+    let display_request = request.mode == TargetType::Display;
     if !open_overlays_core(request, cx) {
-        reject_unavailable_window(cx);
+        if display_request {
+            reject_unavailable_display(cx);
+        } else {
+            reject_unavailable_window(cx);
+        }
         return;
     }
 
@@ -1973,7 +1987,7 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
 
     let select = TargetSelect::global(cx);
     let mode_changed = select.read(cx).mode != Some(request.mode);
-    if mode_changed {
+    if mode_changed || request.secondary_display.is_some() {
         close_overlay_windows(cx);
     }
 
@@ -1982,8 +1996,38 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
         .clone()
         .or_else(|| pinned.as_ref().map(|window| window.display_id.clone()));
 
+    let mut displays = match &display {
+        Some(id) => scap_targets::Display::from_id(id)
+            .map(|display| vec![display])
+            .unwrap_or_default(),
+        None => scap_targets::Display::list(),
+    };
+    let display_pair = if let Some(secondary) = &request.secondary_display {
+        let Some(primary) = display.as_ref().filter(|primary| *primary != secondary) else {
+            return false;
+        };
+        if request.mode != TargetType::Display
+            || request.recording_mode != Mode::Studio
+            || displays.len() != 1
+        {
+            return false;
+        }
+        let Some(secondary_display) = scap_targets::Display::from_id(secondary) else {
+            return false;
+        };
+        displays.push(secondary_display);
+        Some([primary.clone(), secondary.clone()])
+    } else {
+        None
+    };
+    let displays = if displays.is_empty() {
+        vec![scap_targets::Display::primary()]
+    } else {
+        displays
+    };
     select.update(cx, |select, cx| {
-        select.arm(Some(request.mode), request.recording_mode, pinned, cx)
+        select.arm(Some(request.mode), request.recording_mode, pinned, cx);
+        select.display_pair = display_pair.clone();
     });
     sync_camera_presentation(cx);
 
@@ -1992,18 +2036,6 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     {
         arm_camera_park(request.mode, cx);
     }
-
-    let displays = match &display {
-        Some(id) => scap_targets::Display::from_id(id)
-            .map(|display| vec![display])
-            .unwrap_or_default(),
-        None => scap_targets::Display::list(),
-    };
-    let displays = if displays.is_empty() {
-        vec![scap_targets::Display::primary()]
-    } else {
-        displays
-    };
     let wanted: Vec<DisplayId> = displays.iter().map(|display| display.id()).collect();
 
     // Drop overlays for displays this request no longer covers.
@@ -2045,7 +2077,9 @@ fn open_overlays_core(request: OverlayRequest, cx: &mut App) -> bool {
     // (`target_select_overlay.rs:595-617`): with the main window hidden below
     // and the overlays non-activating, a plain key handler has nothing to be
     // delivered to.
-    if cx.global::<AppWindows>().overlays.is_empty() {
+    if cx.global::<AppWindows>().overlays.is_empty()
+        || (display_pair.is_some() && cx.global::<AppWindows>().overlays.len() != 2)
+    {
         disarm_target_selection(cx);
         return false;
     }

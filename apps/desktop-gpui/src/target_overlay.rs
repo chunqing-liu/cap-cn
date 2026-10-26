@@ -249,6 +249,7 @@ pub struct TargetSelect {
     pub mode: Option<TargetType>,
     /// The recording mode the start cluster labels itself with.
     pub recording_mode: Mode,
+    pub display_pair: Option<[DisplayId; 2]>,
     pub cursor_display: Option<DisplayId>,
     pub hovered_window: Option<HoveredWindow>,
     /// A window locked in by a click (or seeded from the main window's picker),
@@ -260,6 +261,14 @@ pub struct TargetSelect {
     _poll: Option<gpui::Task<()>>,
 }
 
+fn recording_display_id(overlay: &DisplayId, pair: Option<&[DisplayId; 2]>) -> Option<DisplayId> {
+    match pair {
+        Some([a, b]) if a != b && (overlay == a || overlay == b) => Some(a.clone()),
+        Some(_) => None,
+        None => Some(overlay.clone()),
+    }
+}
+
 struct TargetSelectGlobal(Entity<TargetSelect>);
 impl Global for TargetSelectGlobal {}
 
@@ -268,6 +277,7 @@ impl TargetSelect {
         let select = cx.new(|_| Self {
             mode: None,
             recording_mode: Mode::Instant,
+            display_pair: None,
             cursor_display: None,
             hovered_window: None,
             pinned_window: None,
@@ -292,6 +302,7 @@ impl TargetSelect {
         cx: &mut Context<Self>,
     ) {
         self.recording_mode = recording_mode;
+        self.display_pair = None;
         self.pinned_window = pinned_window;
         if self.mode == mode {
             cx.notify();
@@ -309,6 +320,9 @@ impl TargetSelect {
     }
 
     pub fn set_recording_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        if mode != Mode::Studio {
+            self.display_pair = None;
+        }
         if self.recording_mode != mode {
             self.recording_mode = mode;
             cx.notify();
@@ -785,9 +799,10 @@ impl OverlayWindow {
         let select = self.select.read(cx);
         let min = area_min_size(select.recording_mode);
         match select.mode? {
-            TargetType::Display => Some(ScreenCaptureTarget::Display {
-                id: self.display_id.clone(),
-            }),
+            TargetType::Display => {
+                recording_display_id(&self.display_id, select.display_pair.as_ref())
+                    .map(|id| ScreenCaptureTarget::Display { id })
+            }
             TargetType::Window => {
                 select
                     .active_window()
@@ -1382,6 +1397,14 @@ impl OverlayWindow {
     /// monitor art, name, resolution.
     fn render_display_variant(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let over = self.is_active_display(window, cx);
+        let display_name = match self.select.read(cx).display_pair.as_ref() {
+            Some([a, _]) => format!(
+                "显示器 {} · {}",
+                if &self.display_id == a { "A" } else { "B" },
+                self.display_name
+            ),
+            None => self.display_name.clone(),
+        };
         let resolution = self.physical_size.map(|(width, height)| {
             // `${size().width}x${size().height} · ${display.refresh_rate}FPS`
             format!("{width}x{height} · {}FPS", self.refresh_rate)
@@ -1430,7 +1453,7 @@ impl OverlayWindow {
                             // renders 700: no 600 face is loaded over there
                             // (`ui-solid/vite.js:31-33` ships 400/500/700 only).
                             .font_weight(FontWeight::BOLD)
-                            .child(SharedString::from(self.display_name.clone())),
+                            .child(SharedString::from(display_name)),
                     )
                     .children(
                         resolution.map(|resolution| {
@@ -2216,9 +2239,11 @@ impl OverlayWindow {
             (theme.blue_10, theme.blue_11)
         };
         let needs_sign_in = self.needs_sign_in(mode, cx);
+        let dual = mode == Mode::Studio && self.select.read(cx).display_pair.is_some();
         let label = match mode {
             Mode::Screenshot => "截图",
             _ if needs_sign_in => "登录后使用",
+            _ if dual => "开始双屏录制",
             _ => "开始录制",
         };
         let icon = match mode {
@@ -2230,6 +2255,7 @@ impl OverlayWindow {
         let mode_label = match mode {
             Mode::Instant if needs_sign_in => "快速分享模式 — 登录后即可录制",
             Mode::Instant => "快速分享模式 — 录制并生成分享链接",
+            Mode::Studio if dual => "同时录制 A + B · 导出一个视频",
             Mode::Studio => "本地录制模式 — 在本机录制和编辑",
             Mode::Screenshot => "截图模式",
         };
@@ -2570,6 +2596,36 @@ fn request_media_access(permission: crate::permissions::OSPermission, cx: &mut A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn either_dual_overlay_starts_the_same_primary_source() {
+        let a = "1".parse::<DisplayId>().unwrap();
+        let b = "2".parse::<DisplayId>().unwrap();
+        for pair in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+            assert_eq!(recording_display_id(&a, Some(&pair)), Some(pair[0].clone()));
+            assert_eq!(recording_display_id(&b, Some(&pair)), Some(pair[0].clone()));
+        }
+    }
+
+    #[test]
+    fn dual_overlay_rejects_stale_or_duplicate_sources() {
+        let a = "1".parse::<DisplayId>().unwrap();
+        let b = "2".parse::<DisplayId>().unwrap();
+        let other = "3".parse::<DisplayId>().unwrap();
+        assert_eq!(recording_display_id(&other, Some(&[a.clone(), b])), None);
+        assert_eq!(
+            recording_display_id(&a, Some(&[a.clone(), a.clone()])),
+            None
+        );
+    }
+
+    #[test]
+    fn single_display_overlay_keeps_its_own_source() {
+        for id in ["1", "2"] {
+            let display = id.parse::<DisplayId>().unwrap();
+            assert_eq!(recording_display_id(&display, None), Some(display));
+        }
+    }
 
     #[test]
     fn a_single_overlay_remains_interactive_without_a_global_cursor_probe() {
