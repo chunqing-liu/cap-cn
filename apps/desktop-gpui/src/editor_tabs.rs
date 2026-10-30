@@ -541,7 +541,7 @@ fn keyboard_generation_settings_fingerprint(settings: &KeyboardSettings) -> (u64
 /// source's `if (!project?.captions) return` says.
 fn with_caption_settings(
     project: &mut ProjectConfiguration,
-    change: impl FnOnce(&mut CaptionSettings),
+    mut change: impl FnMut(&mut CaptionSettings),
 ) -> bool {
     let Some(captions) = project.captions.as_mut() else {
         return false;
@@ -554,7 +554,7 @@ fn with_caption_settings(
 /// *creates* the block from the defaults when it is missing.
 fn with_keyboard_settings(
     project: &mut ProjectConfiguration,
-    change: impl FnOnce(&mut KeyboardSettings),
+    mut change: impl FnMut(&mut KeyboardSettings),
 ) -> bool {
     let keyboard = project.keyboard.get_or_insert_with(KeyboardData::default);
     change(&mut keyboard.settings);
@@ -786,7 +786,7 @@ impl EditorWindow {
                     return;
                 };
                 let style = *style;
-                self.edit_project("rounding-type", window, cx, move |project| {
+                self.edit_controls("rounding-type", window, cx, move |project| {
                     if project.background.rounding_type == style {
                         return false;
                     }
@@ -799,7 +799,7 @@ impl EditorWindow {
                     return;
                 };
                 let mode = *mode;
-                self.edit_project("camera-blur", window, cx, move |project| {
+                self.edit_controls("camera-blur", window, cx, move |project| {
                     if project.camera.background_blur.mode == mode {
                         return false;
                     }
@@ -812,7 +812,7 @@ impl EditorWindow {
                     return;
                 };
                 let shape = *shape;
-                self.edit_project("camera-shape", window, cx, move |project| {
+                self.edit_controls("camera-shape", window, cx, move |project| {
                     project.camera.shape = shape;
                     true
                 });
@@ -822,7 +822,7 @@ impl EditorWindow {
                     return;
                 };
                 let style = *style;
-                self.edit_project("camera-corner-style", window, cx, move |project| {
+                self.edit_controls("camera-corner-style", window, cx, move |project| {
                     if project.camera.rounding_type == style {
                         return false;
                     }
@@ -835,11 +835,11 @@ impl EditorWindow {
                     return;
                 };
                 let mode = mode.clone();
-                self.edit_project("audio-stereo", window, cx, move |project| {
+                self.edit_controls("audio-stereo", window, cx, move |project| {
                     if project.audio.mic_stereo_mode == mode {
                         return false;
                     }
-                    project.audio.mic_stereo_mode = mode;
+                    project.audio.mic_stereo_mode = mode.clone();
                     true
                 });
             }
@@ -879,7 +879,7 @@ impl EditorWindow {
                 };
                 let font = font.to_string();
                 self.set_caption_setting("caption-font", window, cx, move |settings| {
-                    settings.font = font
+                    settings.font = font.clone()
                 });
             }
             SidebarMenu::CaptionHighlightStyle => {
@@ -888,7 +888,7 @@ impl EditorWindow {
                 };
                 let value = value.to_string();
                 self.set_caption_setting("caption-highlight-style", window, cx, move |settings| {
-                    settings.highlight_style = value
+                    settings.highlight_style = value.clone()
                 });
             }
             SidebarMenu::CaptionPosition => {
@@ -897,7 +897,7 @@ impl EditorWindow {
                 };
                 let value = value.to_string();
                 self.set_caption_setting("caption-position", window, cx, move |settings| {
-                    settings.position = value
+                    settings.position = value.clone()
                 });
             }
             SidebarMenu::CaptionAnimation => {
@@ -906,7 +906,7 @@ impl EditorWindow {
                 };
                 let value = value.to_string();
                 self.set_caption_setting("caption-animation", window, cx, move |settings| {
-                    settings.animation = value
+                    settings.animation = value.clone()
                 });
             }
             SidebarMenu::CaptionWeight => {
@@ -924,7 +924,7 @@ impl EditorWindow {
                 };
                 let font = font.to_string();
                 self.set_keyboard_setting("keyboard-font", window, cx, move |settings| {
-                    settings.font = font
+                    settings.font = font.clone()
                 });
             }
             SidebarMenu::KeyboardPosition => {
@@ -933,7 +933,7 @@ impl EditorWindow {
                 };
                 let value = value.to_string();
                 self.set_keyboard_setting("keyboard-position", window, cx, move |settings| {
-                    settings.position = value
+                    settings.position = value.clone()
                 });
             }
             SidebarMenu::KeyboardWeight => {
@@ -958,9 +958,9 @@ impl EditorWindow {
         reason: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
-        change: impl FnOnce(&mut CaptionSettings),
+        mut change: impl FnMut(&mut CaptionSettings),
     ) {
-        self.edit_project(reason, window, cx, |project| {
+        self.edit_controls(reason, window, cx, |project| {
             with_caption_settings(project, |settings| {
                 change(settings);
                 // `STYLE_PRESET_KEYS` knocks the grade to "custom"
@@ -979,10 +979,10 @@ impl EditorWindow {
         reason: &'static str,
         window: &mut Window,
         cx: &mut Context<Self>,
-        change: impl FnOnce(&mut KeyboardSettings),
+        mut change: impl FnMut(&mut KeyboardSettings),
     ) {
-        self.edit_project(reason, window, cx, |project| {
-            with_keyboard_settings(project, change)
+        self.edit_controls(reason, window, cx, |project| {
+            with_keyboard_settings(project, &mut change)
         });
     }
 }
@@ -999,7 +999,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("camera-slider", window, cx, move |project| {
+        self.edit_controls("camera-slider", window, cx, move |project| {
             let camera = &mut project.camera;
             match slider {
                 CameraSlider::Size => camera.size = value,
@@ -1031,7 +1031,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("audio-slider", window, cx, move |project| {
+        self.edit_controls("audio-slider", window, cx, move |project| {
             match slider {
                 AudioSlider::MicVolume => project.audio.mic_volume_db = value,
                 AudioSlider::SystemVolume => project.audio.system_volume_db = value,
@@ -1047,7 +1047,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("cursor-slider", window, cx, move |project| {
+        self.edit_controls("cursor-slider", window, cx, move |project| {
             let cursor = &mut project.cursor;
             match slider {
                 CursorSlider::Size => cursor.size = value.round() as u32,
@@ -1241,7 +1241,7 @@ impl EditorWindow {
                             ui::Toggle::plain(&theme, "camera-hide", camera.hide).on_click(
                                 cx.listener(|this, _, window, cx| {
                                     let next = !this.style_control_project().camera.hide;
-                                    this.edit_project("camera-hide", window, cx, move |p| {
+                                    this.edit_controls("camera-hide", window, cx, move |p| {
                                         p.camera.hide = next;
                                         true
                                     });
@@ -1252,7 +1252,7 @@ impl EditorWindow {
                             ui::Toggle::plain(&theme, "camera-mirror", camera.mirror).on_click(
                                 cx.listener(|this, _, window, cx| {
                                     let next = !this.style_control_project().camera.mirror;
-                                    this.edit_project("camera-mirror", window, cx, move |p| {
+                                    this.edit_controls("camera-mirror", window, cx, move |p| {
                                         p.camera.mirror = next;
                                         true
                                     });
@@ -1301,7 +1301,7 @@ impl EditorWindow {
                             } else {
                                 1.
                             };
-                            this.edit_project("camera-scale-zoom", window, cx, move |p| {
+                            this.edit_controls("camera-scale-zoom", window, cx, move |p| {
                                 p.camera.scale_during_zoom = next;
                                 true
                             });
@@ -1362,7 +1362,7 @@ impl EditorWindow {
                         ui::EditorButton::plain(&theme, "camera-position-reset")
                             .label("重置")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.edit_project("camera-manual-position", window, cx, |p| {
+                                this.edit_controls("camera-manual-position", window, cx, |p| {
                                     p.camera.manual_position = None;
                                     true
                                 });
@@ -1456,7 +1456,7 @@ impl EditorWindow {
             };
 
             grid = grid.child(dot.on_click(cx.listener(move |this, _, window, cx| {
-                this.edit_project("camera-position", window, cx, move |project| {
+                this.edit_controls("camera-position", window, cx, move |project| {
                     project.camera.position = cap_project::CameraPosition {
                         x: match item_x {
                             0 => CameraXPosition::Left,
@@ -1562,7 +1562,7 @@ impl EditorWindow {
                             ui::Toggle::plain(&theme, "audio-mute", audio.mute).on_click(
                                 cx.listener(|this, _, window, cx| {
                                     let next = !this.project.audio.mute;
-                                    this.edit_project("audio-mute", window, cx, move |p| {
+                                    this.edit_controls("audio-mute", window, cx, move |p| {
                                         p.audio.mute = next;
                                         true
                                     });
@@ -1693,7 +1693,7 @@ impl EditorWindow {
                     .child(
                         ui::Toggle::plain(&theme, "audio-improve", enabled).on_click(cx.listener(
                             move |this, _, window, cx| {
-                                this.edit_project("audio-improve", window, cx, move |project| {
+                                this.edit_controls("audio-improve", window, cx, move |project| {
                                     project.audio.improve = !enabled;
                                     true
                                 });
@@ -1727,7 +1727,7 @@ impl EditorWindow {
                                 let Some(&(isolation, _, _)) = isolation_options.get(*index) else {
                                     return;
                                 };
-                                this.edit_project("voice-isolation", window, cx, move |project| {
+                                this.edit_controls("voice-isolation", window, cx, move |project| {
                                     if project.audio.isolation == isolation {
                                         return false;
                                     }
@@ -1830,7 +1830,7 @@ impl EditorWindow {
             ui::Field::inline(&theme, "显示鼠标").value(
                 ui::Toggle::plain(&theme, "cursor-show", !hidden)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.edit_project("cursor-hide", window, cx, move |p| {
+                        this.edit_controls("cursor-hide", window, cx, move |p| {
                             p.cursor.hide = !hidden;
                             true
                         });
@@ -1860,7 +1860,7 @@ impl EditorWindow {
                 ui::Field::inline(&theme, "空闲时隐藏").value(
                     ui::Toggle::plain(&theme, "cursor-idle", idle)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.edit_project("cursor-idle", window, cx, move |p| {
+                            this.edit_controls("cursor-idle", window, cx, move |p| {
                                 p.cursor.hide_when_idle = !idle;
                                 true
                             });
@@ -1920,7 +1920,7 @@ impl EditorWindow {
                             let style = *style;
                             // `applyCursorStylePreset` (`:551-561`): the style and
                             // its three physics values, in one batch.
-                            this.edit_project("cursor-style", window, cx, move |project| {
+                            this.edit_controls("cursor-style", window, cx, move |project| {
                                 project.cursor.animation_style = style;
                                 if let Some(preset) = style.preset() {
                                     project.cursor.tension = preset.tension;
@@ -1943,7 +1943,7 @@ impl EditorWindow {
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.sidebar.cursor_physics_open.set_open(!smooth);
                                     this.animate_collapsibles(window, cx);
-                                    this.edit_project("cursor-raw", window, cx, move |p| {
+                                    this.edit_controls("cursor-raw", window, cx, move |p| {
                                         p.cursor.raw = smooth;
                                         true
                                     });
@@ -1989,7 +1989,7 @@ impl EditorWindow {
                     ui::Toggle::plain(&theme, "cursor-svg", cursor.use_svg)
                         .on_click(cx.listener(|this, _, window, cx| {
                             let next = !this.style_control_project().cursor.use_svg;
-                            this.edit_project("cursor-svg", window, cx, move |p| {
+                            this.edit_controls("cursor-svg", window, cx, move |p| {
                                 p.cursor.use_svg = next;
                                 true
                             });
@@ -2360,7 +2360,7 @@ impl EditorWindow {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let next = !enabled;
                         this.tracks.keyboard = next;
-                        this.edit_project("keyboard-enabled", window, cx, move |project| {
+                        this.edit_controls("keyboard-enabled", window, cx, move |project| {
                             let keyboard =
                                 project.keyboard.get_or_insert_with(KeyboardData::default);
                             keyboard.settings.enabled = next;
@@ -3028,7 +3028,7 @@ impl EditorWindow {
         let Some(preset) = CAPTION_PRESETS.get(index) else {
             return;
         };
-        self.edit_project("caption-preset", window, cx, move |project| {
+        self.edit_controls("caption-preset", window, cx, move |project| {
             // Unlike the keyboard tab, the source's caption setters bail when
             // there is no captions block. `applyCaptionPreset` goes through the
             // same setter, so it does too.

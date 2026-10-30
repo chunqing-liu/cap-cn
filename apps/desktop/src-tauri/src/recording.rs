@@ -6587,6 +6587,7 @@ fn project_config_from_recording(
             speed_audio_mode: None,
             hide_cursor: None,
             volume: None,
+            settings: None,
         })
         .collect::<Vec<_>>();
 
@@ -10172,6 +10173,7 @@ mod preparing_presentation_parity_tests {
             speed_audio_mode: None,
             hide_cursor: None,
             volume: None,
+            settings: None,
         }]
     }
 

@@ -303,6 +303,7 @@ pub fn base_config(durations: &[f64]) -> ProjectConfiguration {
                 volume: None,
                 hide_cursor: None,
                 auto_zoom: None,
+                settings: None,
             })
             .collect(),
         transitions: Vec::new(),

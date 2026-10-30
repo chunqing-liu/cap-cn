@@ -985,9 +985,9 @@ pub enum PanelSection {
 
 impl EditorWindow {
     pub fn sidebar_selection(&self) -> Option<&crate::editor_edits::Selection> {
-        self.selection.as_ref().filter(|selection| {
-            selection.track != TrackKind::Clip || self.project.dual_display.is_some()
-        })
+        self.selection
+            .as_ref()
+            .filter(|selection| selection.track != TrackKind::Clip)
     }
 
     /// The tab rail's click: clear any selection, then switch tab and put the
@@ -1015,8 +1015,17 @@ impl EditorWindow {
     /// "only when the user isn't sitting on None" guard (`:1807-1811`).
     pub(crate) fn sync_background_source_tab(&mut self) {
         if self.sidebar.source_tab != SourceTab::None {
-            self.sidebar.source_tab = source_tab_for(&self.project.background.source);
+            self.sidebar.source_tab =
+                source_tab_for(&self.style_control_project().background.source);
         }
+    }
+
+    pub(crate) fn sync_clip_control_state(&mut self) {
+        let project = self.style_control_project();
+        let source = initial_source_tab(&project);
+        let ripple = project.cursor.ripple.enabled;
+        self.sidebar.source_tab = source;
+        self.sidebar.cursor_ripple_open.set_open(ripple);
     }
 
     /// One background write, through the shared fan-out. `change` returns
@@ -1025,7 +1034,7 @@ impl EditorWindow {
     fn edit_background(
         &mut self,
         reason: &'static str,
-        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        change: impl FnMut(&mut ProjectConfiguration) -> bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1063,6 +1072,24 @@ impl EditorWindow {
             return;
         }
         self.end_color_history();
+        if !change(&mut self.project) {
+            return;
+        }
+        self.project_changed(window, cx);
+        self.note_project_edit(reason);
+    }
+
+    pub(crate) fn edit_controls(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        change: impl FnMut(&mut ProjectConfiguration) -> bool,
+    ) {
+        if !self.project_ready() {
+            return;
+        }
+        self.end_color_history();
         if !self.apply_control_change(change) {
             return;
         }
@@ -1075,7 +1102,8 @@ impl EditorWindow {
     /// scripted click's predicted value is checkable against what the running
     /// app resolved rather than against a screenshot.
     pub(crate) fn note_project_edit(&self, reason: &'static str) {
-        let project = &self.project;
+        let snapshot = self.style_control_project();
+        let project = snapshot.as_ref();
         tracing::info!(
             reason,
             camera = format!(
@@ -1187,7 +1215,13 @@ impl EditorWindow {
                 .map_or(0., |stop| stop.position),
             // Every grade slider is `Math.round(value * 100)` in the UI and
             // `v / 100` back into the config (`ColorCorrectionSection.tsx:181`).
-            SliderKey::Grade(target, slider) => (slider.read(self.grade(target)) * 100.).round(),
+            SliderKey::Grade(target, slider) => {
+                let grade = match target {
+                    GradeTarget::Screen => &project.color_correction.screen,
+                    GradeTarget::Camera => &project.color_correction.camera,
+                };
+                (slider.read(grade) * 100.).round()
+            }
             SliderKey::Camera(slider) => slider.read(&project),
             SliderKey::Audio(slider) => slider.read(&project),
             SliderKey::ClipVolume(index) => self
@@ -1711,7 +1745,7 @@ impl EditorWindow {
         // The one `[u8; 3]` target that does not live under `background`, so
         // it takes the general fan-out rather than `edit_background`.
         if target == ColorTarget::CursorRipple {
-            return self.edit_project("cursor-ripple-color", window, cx, move |project| {
+            return self.edit_controls("cursor-ripple-color", window, cx, move |project| {
                 if project.cursor.ripple.color == color {
                     return false;
                 }
@@ -1785,24 +1819,28 @@ impl EditorWindow {
         let hex = rgb_to_hex(color);
         match target {
             ColorTarget::CaptionColor => {
-                self.set_caption_setting("caption-color", window, cx, move |s| s.color = hex)
+                self.set_caption_setting("caption-color", window, cx, move |s| {
+                    s.color = hex.clone()
+                })
             }
             ColorTarget::CaptionBackground => {
                 self.set_caption_setting("caption-background-color", window, cx, move |s| {
-                    s.background_color = hex
+                    s.background_color = hex.clone()
                 })
             }
             ColorTarget::CaptionHighlight => {
                 self.set_caption_setting("caption-highlight-color", window, cx, move |s| {
-                    s.highlight_color = hex
+                    s.highlight_color = hex.clone()
                 })
             }
             ColorTarget::KeyboardColor => {
-                self.set_keyboard_setting("keyboard-color", window, cx, move |s| s.color = hex)
+                self.set_keyboard_setting("keyboard-color", window, cx, move |s| {
+                    s.color = hex.clone()
+                })
             }
             ColorTarget::KeyboardBackground => {
                 self.set_keyboard_setting("keyboard-background-color", window, cx, move |s| {
-                    s.background_color = hex
+                    s.background_color = hex.clone()
                 })
             }
             ColorTarget::TextColor(index) => {
@@ -2182,7 +2220,9 @@ impl EditorWindow {
         self.edit_background(
             "wallpaper",
             |project| {
-                project.background.source = BackgroundSource::Wallpaper { path: Some(path) };
+                project.background.source = BackgroundSource::Wallpaper {
+                    path: Some(path.clone()),
+                };
                 true
             },
             window,
@@ -2511,6 +2551,29 @@ impl EditorWindow {
                     .border_color(self.card_line())
                     .shadow(theme.editor.card_shadow())
                     .child(rail)
+                    .when(
+                        selection.is_none() && self.sidebar.style_target.is_none(),
+                        |this| {
+                            let indices = self.clip_control_indices();
+                            let label = if indices.len() > 1 {
+                                format!("已选 {} 段 · 显示首段值，仅同步修改项", indices.len())
+                            } else if let Some(index) = indices.first() {
+                                format!("仅修改视频片段 {} · 不影响其他片段", index + 1)
+                            } else {
+                                "没有可编辑的视频片段".to_string()
+                            };
+                            this.child(
+                                div()
+                                    .px(px(12.))
+                                    .py(px(8.))
+                                    .text_size(px(11.))
+                                    .child(label)
+                                    .child(
+                                        "画布、导出和新录制默认设置为工程级；全选片段可批量修改。",
+                                    ),
+                            )
+                        },
+                    )
                     .children(self.sidebar.image_import_error.as_ref().map(|error| {
                         div()
                             .p(px(12.))
@@ -4404,6 +4467,40 @@ pub(crate) fn apply_style_control_change(
 }
 
 impl EditorWindow {
+    pub(crate) fn clip_control_indices(&self) -> Vec<usize> {
+        let Some(timeline) = &self.project.timeline else {
+            return Vec::new();
+        };
+        if let Some(selection) = self
+            .selection
+            .as_ref()
+            .filter(|s| s.track == TrackKind::Clip)
+        {
+            let mut indices: Vec<_> = selection
+                .indices
+                .iter()
+                .copied()
+                .filter(|&index| index < timeline.segments.len())
+                .collect();
+            indices.sort_unstable();
+            indices.dedup();
+            if !indices.is_empty() {
+                return indices;
+            }
+        }
+        let index = timeline
+            .get_frame_mapping(self.playhead_time())
+            .map(|mapping| match mapping {
+                cap_project::TimelineFrameMapping::Single { source, .. }
+                | cap_project::TimelineFrameMapping::Hold { source, .. } => source.segment_index,
+                cap_project::TimelineFrameMapping::Transition { incoming, .. } => {
+                    incoming.segment_index
+                }
+            })
+            .or_else(|| timeline.segments.len().checked_sub(1));
+        index.into_iter().collect()
+    }
+
     pub(crate) fn style_background(&self) -> &cap_project::BackgroundConfiguration {
         self.sidebar
             .style_target
@@ -4418,12 +4515,29 @@ impl EditorWindow {
                     .background
                     .as_ref()
             })
+            .or_else(|| {
+                let index = *self.clip_control_indices().first()?;
+                self.project
+                    .timeline
+                    .as_ref()?
+                    .segments
+                    .get(index)?
+                    .settings
+                    .as_ref()?
+                    .background
+                    .as_ref()
+            })
             .unwrap_or(&self.project.background)
     }
 
     pub(crate) fn style_control_project(&self) -> std::borrow::Cow<'_, ProjectConfiguration> {
         let Some((index, group)) = self.sidebar.style_target else {
-            return std::borrow::Cow::Borrowed(&self.project);
+            return self
+                .clip_control_indices()
+                .first()
+                .map_or(std::borrow::Cow::Borrowed(&self.project), |&index| {
+                    self.project.clip_control_project(index)
+                });
         };
         let Some(segment) = self
             .project
@@ -4467,13 +4581,22 @@ impl EditorWindow {
 
     fn apply_control_change(
         &mut self,
-        change: impl FnOnce(&mut ProjectConfiguration) -> bool,
+        change: impl FnMut(&mut ProjectConfiguration) -> bool,
     ) -> bool {
         match self.sidebar.style_target {
             Some((index, group)) => {
                 apply_style_control_change(&mut self.project, index, group, change)
             }
-            None => change(&mut self.project),
+            None => {
+                let indices = self.clip_control_indices();
+                match cap_project::apply_clip_control_change(&mut self.project, &indices, change) {
+                    Ok(changed) => changed,
+                    Err(error) => {
+                        tracing::error!(%error, "clip settings edit rejected");
+                        false
+                    }
+                }
+            }
         }
     }
 

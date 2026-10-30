@@ -905,6 +905,7 @@ mod fixture {
                     speed_audio_mode: None,
                     hide_cursor: None,
                     volume: None,
+                    settings: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),

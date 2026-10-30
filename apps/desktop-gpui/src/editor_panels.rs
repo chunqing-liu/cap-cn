@@ -2877,7 +2877,7 @@ impl EditorWindow {
                     return;
                 }
                 if let Some(value) = ui::parse_number(&text).filter(|value| value.is_finite()) {
-                    self.edit_project("dual-zoom-amount", window, cx, move |project| {
+                    self.edit_controls("dual-zoom-amount", window, cx, move |project| {
                         let Some(dual) = project.dual_display.as_mut() else {
                             return false;
                         };
@@ -2944,7 +2944,7 @@ impl EditorWindow {
                     return;
                 }
                 if let Some(value) = ui::parse_number(&text) {
-                    self.edit_project("dual-zoom-duration", window, cx, move |project| {
+                    self.edit_controls("dual-zoom-duration", window, cx, move |project| {
                         let Some(dual) = project.dual_display.as_mut() else {
                             return false;
                         };

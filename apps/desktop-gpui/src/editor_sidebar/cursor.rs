@@ -291,11 +291,11 @@ impl EditorWindow {
             })
             .on_click(cx.listener(move |this, _, window, cx| {
                 let cursor_type = cursor_type.clone();
-                this.edit_project("cursor-type", window, cx, move |project| {
+                this.edit_controls("cursor-type", window, cx, move |project| {
                     if *project.cursor.cursor_type() == cursor_type {
                         return false;
                     }
-                    project.cursor.set_cursor_type(cursor_type);
+                    project.cursor.set_cursor_type(cursor_type.clone());
                     true
                 });
             }))
@@ -363,7 +363,7 @@ impl EditorWindow {
                             let next = !this.style_control_project().cursor.ripple.enabled;
                             this.sidebar.cursor_ripple_open.set_open(next);
                             this.animate_collapsibles(window, cx);
-                            this.edit_project("cursor-ripple", window, cx, move |project| {
+                            this.edit_controls("cursor-ripple", window, cx, move |project| {
                                 project.cursor.ripple.enabled = next;
                                 true
                             });

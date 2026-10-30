@@ -385,6 +385,10 @@ pub(crate) fn validate_input(input: &PreparingPreviewInput) -> Result<f64, Prepa
         || !timeline.keyboard_segments.is_empty()
         || !timeline.audio_segments.is_empty()
         || !timeline.style_segments.is_empty()
+        || timeline
+            .segments
+            .iter()
+            .any(|segment| segment.settings.is_some())
         || !timeline.image_segments.is_empty()
         || !timeline.camera3d_segments.is_empty()
     {

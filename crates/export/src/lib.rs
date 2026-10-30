@@ -307,6 +307,7 @@ pub fn synthesize_default_timeline(
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             })
         })
         .collect();
@@ -371,6 +372,15 @@ pub fn make_cursor_only_project(mut project_config: ProjectConfiguration) -> Pro
         for style in &mut timeline.style_segments {
             if let Some(background) = style.overrides.background.as_mut() {
                 clear_background_pixels(background);
+            }
+        }
+        for segment in &mut timeline.segments {
+            if let Some(settings) = &mut segment.settings {
+                if let Some(background) = &mut settings.background {
+                    clear_background_pixels(background);
+                }
+                settings.caption_settings = None;
+                settings.keyboard = None;
             }
         }
         // Fullscreen text segments pause the recording clock (holds), which

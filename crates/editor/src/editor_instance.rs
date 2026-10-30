@@ -95,6 +95,12 @@ impl PreviewCursorCache {
                             .cursor
                             .as_ref()
                             .is_some_and(|cursor| !cursor.raw)
+                }) || timeline.segments.iter().any(|segment| {
+                    segment
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.cursor.as_ref())
+                        .is_some_and(|cursor| !cursor.raw)
                 })
             })
         {
@@ -428,6 +434,7 @@ impl EditorInstance {
                             hide_cursor: None,
                             auto_zoom: None,
                             volume: None,
+                            settings: None,
                         }],
                         _ => {
                             warn!(
@@ -464,6 +471,7 @@ impl EditorInstance {
                             hide_cursor: None,
                             auto_zoom: None,
                             volume: None,
+                            settings: None,
                         })
                     })
                     .collect(),

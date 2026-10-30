@@ -74,6 +74,10 @@ impl PreparingAudioSources {
                 || segment.start != 0.0
                 || segment.timescale != 1.0
                 || segment.speed_audio_mode.is_some()
+                || segment
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.audio.is_some())
                 || segment.volume() != 1.0
                 || !segment.end.is_finite()
                 || segment.end <= 0.0

@@ -314,6 +314,7 @@ pub fn write_project_files(
             hide_cursor: None,
             auto_zoom: None,
             volume: None,
+            settings: None,
         });
         clips.push(ClipConfiguration {
             index: i as u32,

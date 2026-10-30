@@ -2212,6 +2212,7 @@ pub fn apply_caption_result(
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             }],
             transitions: Vec::new(),
             zoom_segments: Vec::new(),

@@ -140,6 +140,7 @@ impl EditorWindow {
         edit: Edit,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let current = self.style_control_project().dual_display.clone();
         div()
             .id(SharedString::from(id))
             .px(px(8.))
@@ -150,42 +151,51 @@ impl EditorWindow {
             .cursor_pointer()
             .child(label)
             .on_click(cx.listener(move |this, _, window, cx| {
-                let Some(dual) = &mut this.project.dual_display else {
+                if let Edit::Select(b) = edit {
+                    this.canvas_selection = Some(if b {
+                        CanvasSelection::Camera
+                    } else {
+                        CanvasSelection::Display
+                    });
+                    cx.notify();
                     return;
-                };
-                match edit {
-                    Edit::AutoZoom => dual.auto_zoom.enabled = !dual.auto_zoom.enabled,
-                    Edit::ZoomMode(mode) => dual.auto_zoom.mode = mode,
-                    Edit::ZoomAmount(amount) => dual.auto_zoom.amount = amount,
-                    Edit::Layout(layout) => dual.apply_layout(layout),
-                    Edit::Canvas(w, h) => dual.canvas_size = XY::new(w, h),
-                    Edit::Select(b) => {
-                        this.canvas_selection = Some(if b {
-                            CanvasSelection::Camera
-                        } else {
-                            CanvasSelection::Display
-                        });
-                        cx.notify();
-                        return;
-                    }
-                    Edit::Front(b) => dual.a_in_front = !b,
-                    Edit::Visibility(b) => {
-                        let layer = if b { &mut dual.b } else { &mut dual.a };
-                        layer.hidden = !layer.hidden;
-                    }
-                    Edit::Scale(b, factor) => {
-                        let layer = if b { &mut dual.b } else { &mut dual.a };
-                        layer.size.x *= factor;
-                        layer.size.y *= factor;
-                        layer.sanitize();
-                    }
-                    Edit::Crop(b, edge, delta) => {
-                        let layer = if b { &mut dual.b } else { &mut dual.a };
-                        layer.crop[edge] += delta;
-                        layer.sanitize();
-                    }
                 }
-                this.project_changed(window, cx);
+                let current = current.clone();
+                this.edit_controls("dual-display-settings", window, cx, move |project| {
+                    let Some(dual) = &mut project.dual_display else {
+                        return false;
+                    };
+                    match edit {
+                        Edit::AutoZoom => {
+                            dual.auto_zoom.enabled =
+                                current.as_ref().is_none_or(|d| !d.auto_zoom.enabled);
+                        }
+                        Edit::ZoomMode(mode) => dual.auto_zoom.mode = mode,
+                        Edit::ZoomAmount(amount) => dual.auto_zoom.amount = amount,
+                        Edit::Layout(layout) => dual.apply_layout(layout),
+                        Edit::Canvas(w, h) => dual.canvas_size = XY::new(w, h),
+                        Edit::Select(_) => return false,
+                        Edit::Front(b) => dual.a_in_front = !b,
+                        Edit::Visibility(b) => {
+                            let layer = if b { &mut dual.b } else { &mut dual.a };
+                            layer.hidden = current
+                                .as_ref()
+                                .is_none_or(|d| !(if b { &d.b } else { &d.a }).hidden);
+                        }
+                        Edit::Scale(b, factor) => {
+                            let layer = if b { &mut dual.b } else { &mut dual.a };
+                            layer.size.x *= factor;
+                            layer.size.y *= factor;
+                            layer.sanitize();
+                        }
+                        Edit::Crop(b, edge, delta) => {
+                            let layer = if b { &mut dual.b } else { &mut dual.a };
+                            layer.crop[edge] += delta;
+                            layer.sanitize();
+                        }
+                    }
+                    true
+                });
             }))
             .into_any_element()
     }
@@ -258,7 +268,7 @@ impl EditorWindow {
                     cx,
                 ));
             }
-            content = content.child("默认放大倍率")
+            content = content.child("片段放大倍率")
                 .child(self.render_number_field(FieldKey::DualZoomAmount, "×", 96.))
                 .child(amounts)
                 .child(
@@ -276,7 +286,7 @@ impl EditorWindow {
                 )
                 .child(
                     div().text_size(px(11.)).text_color(self.theme.gray_11)
-                        .child("这里是尚未单独设置片段的默认值。分割视频后，点击视频轨道中的任意一段，即可独立调整该段的自动缩放开关、倍率、跟随方式和保持时长。"),
+                        .child("以上设置只作用于选中片段；多选可批量修改。未选片段时作用于播放头所在片段。分割后两段可分别调整。"),
                 );
         }
         content = content.child(format!(

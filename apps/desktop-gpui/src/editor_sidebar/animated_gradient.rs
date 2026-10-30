@@ -499,7 +499,7 @@ impl EditorWindow {
 
     fn edit_animated_gradient(
         &mut self,
-        change: impl FnOnce(&mut AnimatedGradientConfig) -> bool,
+        mut change: impl FnMut(&mut AnimatedGradientConfig) -> bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -602,7 +602,7 @@ impl EditorWindow {
         self.begin_animated_gradient_stop_drag(index, cx);
         self.edit_animated_gradient(
             |config| {
-                *config = updated;
+                *config = updated.clone();
                 true
             },
             window,

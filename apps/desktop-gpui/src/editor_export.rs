@@ -121,6 +121,7 @@ impl ExportFormatKind {
 pub enum ExportResolution {
     P720,
     P1080,
+    P1440,
     P4k,
     P5120x1440,
 }
@@ -130,6 +131,7 @@ impl ExportResolution {
         match self {
             Self::P720 => "720p",
             Self::P1080 => "1080p",
+            Self::P1440 => "1440p",
             Self::P4k => "4K",
             Self::P5120x1440 => "5120×1440",
         }
@@ -139,6 +141,7 @@ impl ExportResolution {
         match self {
             Self::P720 => (1280, 720),
             Self::P1080 => (1920, 1080),
+            Self::P1440 => (2560, 1440),
             Self::P4k => (3840, 2160),
             Self::P5120x1440 => (5120, 1440),
         }
@@ -147,6 +150,7 @@ impl ExportResolution {
     fn from_slug(slug: &str) -> Self {
         match slug {
             "1080p" => Self::P1080,
+            "1440p" | "2560×1440" | "1440p · 2560×1440" => Self::P1440,
             "4K" | "4k" => Self::P4k,
             "5120×1440" => Self::P5120x1440,
             _ => Self::P720,
@@ -511,7 +515,6 @@ impl EditorWindow {
             .as_ref()
             .is_some_and(|dual| dual.canvas_size == XY::new(5120, 1440))
         {
-            ui.resolution = ExportResolution::P5120x1440;
             ui.destination = ExportDestination::File;
             ui.format = ExportFormatKind::Mp4;
             ui.cursor_only = false;
@@ -523,7 +526,7 @@ impl EditorWindow {
             ui.format = ExportFormatKind::Gif;
             if matches!(
                 ui.resolution,
-                ExportResolution::P4k | ExportResolution::P5120x1440
+                ExportResolution::P1440 | ExportResolution::P4k | ExportResolution::P5120x1440
             ) {
                 ui.resolution = ExportResolution::P1080;
             }
@@ -631,6 +634,7 @@ impl EditorWindow {
             vec![
                 ExportResolution::P720,
                 ExportResolution::P1080,
+                ExportResolution::P1440,
                 ExportResolution::P4k,
                 ExportResolution::P5120x1440,
             ]
@@ -1982,7 +1986,9 @@ impl EditorWindow {
                             }
                             if matches!(
                                 ui.resolution,
-                                ExportResolution::P4k | ExportResolution::P5120x1440
+                                ExportResolution::P1440
+                                    | ExportResolution::P4k
+                                    | ExportResolution::P5120x1440
                             ) {
                                 ui.resolution = ExportResolution::P1080;
                             }
@@ -2030,6 +2036,11 @@ impl EditorWindow {
                     cx.notify();
                 })),
             )
+            .child(div().text_size(px(11.)).child(format!(
+                "{} × {} · 按画布比例适配，不拉伸画面",
+                ui.resolution.size().0,
+                ui.resolution.size().1
+            )))
     }
 
     fn export_fps_field(
@@ -2966,7 +2977,9 @@ async fn run_export(
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportDestination, ExportPhase, ExportUi, cancel_matching_export};
+    use super::{
+        ExportDestination, ExportPhase, ExportResolution, ExportUi, cancel_matching_export,
+    };
     use crate::store::ExportPrefs;
     use std::path::PathBuf;
     use std::sync::{
@@ -2988,6 +3001,19 @@ mod tests {
             advanced_open: false,
             organization_id: None,
         })
+    }
+
+    #[test]
+    fn qhd_and_dual_qhd_are_distinct_and_round_trip() {
+        for resolution in [ExportResolution::P1440, ExportResolution::P5120x1440] {
+            assert_eq!(ExportResolution::from_slug(resolution.label()), resolution);
+        }
+        assert_eq!(ExportResolution::P1440.size(), (2560, 1440));
+        assert_eq!(ExportResolution::P5120x1440.size(), (5120, 1440));
+        assert_eq!(
+            ExportResolution::from_slug("2560×1440"),
+            ExportResolution::P1440
+        );
     }
 
     #[test]

@@ -66,6 +66,10 @@ fn clip_audio_changed(previous: &ProjectConfiguration, next: &ProjectConfigurati
             segment.volume(),
             offsets.mic,
             offsets.system_audio,
+            segment
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.audio.clone()),
         )
     };
     match (&previous.timeline, &next.timeline) {

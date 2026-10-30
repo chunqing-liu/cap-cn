@@ -942,6 +942,8 @@ pub struct TimelineSegment {
     pub hide_cursor: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_zoom: Option<crate::DualDisplayAutoZoom>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<crate::ClipSettings>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2838,11 +2840,18 @@ impl ProjectConfiguration {
 
     pub fn cursor_at(&self, time: f64) -> &CursorConfiguration {
         self.style_override_at(time, |overrides| overrides.cursor.as_ref())
+            .or_else(|| {
+                self.clip_settings_at(time)
+                    .and_then(|settings| settings.cursor.as_ref())
+            })
             .unwrap_or(&self.cursor)
     }
 
     pub fn style_at(&self, time: f64) -> Cow<'_, Self> {
         let mut configuration = Cow::Borrowed(self);
+        if let Some(settings) = self.clip_settings_at(time) {
+            settings.apply(configuration.to_mut());
+        }
         if let Some(background) =
             self.style_override_at(time, |overrides| overrides.background.as_ref())
         {
@@ -2879,6 +2888,12 @@ impl ProjectConfiguration {
                             .camera
                             .as_ref()
                             .is_some_and(|camera| !camera.hide)
+                }) || timeline.segments.iter().any(|segment| {
+                    segment
+                        .settings
+                        .as_ref()
+                        .and_then(|settings| settings.camera.as_ref())
+                        .is_some_and(|camera| !camera.hide)
                 })
             })
     }
@@ -3194,6 +3209,7 @@ mod tests {
                     volume: None,
                     hide_cursor: None,
                     auto_zoom: None,
+                    settings: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -3205,6 +3221,7 @@ mod tests {
                     volume: None,
                     hide_cursor: None,
                     auto_zoom: None,
+                    settings: None,
                 },
             ],
             transitions,
@@ -4142,6 +4159,7 @@ mod tests {
             volume: None,
             hide_cursor: hide_cursor.then_some(true),
             auto_zoom: None,
+            settings: None,
         }
     }
 

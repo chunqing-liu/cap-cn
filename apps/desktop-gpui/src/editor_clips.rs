@@ -2000,6 +2000,7 @@ impl PreparedMp4Import {
             hide_cursor: None,
             auto_zoom: None,
             volume: None,
+            settings: None,
         });
         add_clip_configs(&mut config, index, std::slice::from_ref(&self.segment));
         config.validate().map_err(|error| error.to_string())?;
@@ -2485,6 +2486,7 @@ fn full_timeline_for_segments(
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             })
         })
         .collect()
@@ -3083,6 +3085,7 @@ fn full_timeline_for_source_segments(
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             })
         })
         .collect()
@@ -3175,6 +3178,7 @@ fn source_timeline_segments_for_import(
             hide_cursor: segment.hide_cursor,
             auto_zoom: segment.auto_zoom.clone(),
             volume: segment.volume,
+            settings: None,
         });
     }
 
@@ -3425,6 +3429,7 @@ pub(crate) fn append_cap_project_to_editor(
                 hide_cursor: source_segment.hide_cursor,
                 auto_zoom: source_segment.auto_zoom.clone(),
                 volume: source_segment.volume,
+                settings: None,
             });
         }
     }

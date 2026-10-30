@@ -279,6 +279,7 @@ async fn load_recording(
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 }]
             }
             StudioRecordingMeta::MultipleSegments { inner } => inner
@@ -304,6 +305,7 @@ async fn load_recording(
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     })
                 })
                 .collect(),

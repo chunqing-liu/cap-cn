@@ -1844,6 +1844,7 @@ pub fn ensure_timeline(project: &mut ProjectConfiguration, clip_display_duration
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             })
             .collect(),
         transitions: Vec::new(),
@@ -2745,6 +2746,8 @@ pub fn merge_clip_segments(
     left.speed_audio_mode = settings.speed_audio_mode;
     left.volume = settings.volume;
     left.hide_cursor = settings.hide_cursor;
+    left.auto_zoom = settings.auto_zoom;
+    left.settings = settings.settings;
 
     // `transitionsAfterClipMerge`: the merged boundary's transition is gone,
     // everything past it shifts down one.

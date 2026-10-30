@@ -355,7 +355,7 @@ impl AudioRenderer {
                     TimelineFrameMapping::Single { source, .. } => {
                         if source.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
                             sources.render(
-                                project,
+                                &project.clip_audio_project(source.segment),
                                 source.segment.recording_clip,
                                 self.playhead_to_samples(source.source_time) + span_offset,
                                 count,
@@ -379,7 +379,7 @@ impl AudioRenderer {
                         incoming_buffer.fill(0.0);
                         if outgoing.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
                             sources.render(
-                                project,
+                                &project.clip_audio_project(outgoing.segment),
                                 outgoing.segment.recording_clip,
                                 self.playhead_to_samples(outgoing.source_time) + span_offset,
                                 count,
@@ -389,7 +389,7 @@ impl AudioRenderer {
                         }
                         if incoming.segment.speed_audio_mode != Some(ClipSpeedAudioMode::Mute) {
                             sources.render(
-                                project,
+                                &project.clip_audio_project(incoming.segment),
                                 incoming.segment.recording_clip,
                                 self.playhead_to_samples(incoming.source_time) + span_offset,
                                 count,
@@ -687,6 +687,8 @@ impl AudioRenderer {
         out_offset: usize,
         out: &mut [f32],
     ) -> usize {
+        let scoped = project.clip_audio_project(source.segment);
+        let project = scoped.as_ref();
         let rendered = if source.segment.timescale == 1.0 {
             if source.segment.speed_audio_mode == Some(ClipSpeedAudioMode::Mute) {
                 return 0;
@@ -2649,6 +2651,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -2660,6 +2663,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     TimelineSegment {
                         recording_clip: 0,
@@ -2671,6 +2675,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2682,6 +2687,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2693,6 +2699,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     TimelineSegment {
                         recording_clip: 1,
@@ -2704,6 +2711,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                 ],
                 transitions: Vec::new(),

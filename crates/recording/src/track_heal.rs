@@ -1217,6 +1217,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![ZoomSegment {
@@ -1277,6 +1278,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             }],
             transitions: Vec::new(),
             zoom_segments: vec![],
@@ -1356,6 +1358,7 @@ mod tests {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 },
                 TimelineSegment {
                     recording_clip: 1,
@@ -1367,6 +1370,7 @@ mod tests {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 },
             ],
             transitions: Vec::new(),

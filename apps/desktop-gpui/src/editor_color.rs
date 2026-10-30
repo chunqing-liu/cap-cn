@@ -459,7 +459,7 @@ impl EditorWindow {
         };
         let values = preset.values;
         let id = preset.id;
-        self.edit_project("color-preset", window, cx, move |project| {
+        self.edit_controls("color-preset", window, cx, move |project| {
             let grade = Self::grade_mut(project, target);
             let next = ColorCorrection {
                 preset: id.to_string(),
@@ -492,7 +492,7 @@ impl EditorWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.edit_project("grade", window, cx, move |project| {
+        self.edit_controls("grade", window, cx, move |project| {
             let grade = Self::grade_mut(project, target);
             if (slider.read(grade) - value).abs() < f32::EPSILON {
                 return false;
@@ -620,7 +620,7 @@ impl EditorWindow {
                 ui::Field::inline(&theme, "应用到鼠标").value(
                     ui::Toggle::plain(&theme, "grade-cursor", grade_cursor)
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.edit_project("grade-cursor", window, cx, |project| {
+                            this.edit_controls("grade-cursor", window, cx, |project| {
                                 project.color_correction.grade_cursor = !grade_cursor;
                                 true
                             });

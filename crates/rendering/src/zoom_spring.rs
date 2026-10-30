@@ -144,13 +144,45 @@ impl CursorCropMaps {
         let Some(timeline) = &project.timeline else {
             return maps;
         };
-        if timeline.style_segments.is_empty()
-            || !timeline
-                .zoom_segments
-                .iter()
-                .any(|segment| matches!(segment.mode, ZoomMode::Auto))
+        if !timeline
+            .zoom_segments
+            .iter()
+            .any(|segment| matches!(segment.mode, ZoomMode::Auto))
         {
             return maps;
+        }
+        let mut time = 0.0;
+        while let Some(mapping) = timeline.get_frame_mapping(time) {
+            let (source, end) = match mapping {
+                cap_project::TimelineFrameMapping::Single { source, output_end }
+                | cap_project::TimelineFrameMapping::Hold { source, output_end } => {
+                    (source, output_end)
+                }
+                cap_project::TimelineFrameMapping::Transition {
+                    incoming,
+                    output_end,
+                    ..
+                } => (incoming, output_end),
+            };
+            if !end.is_finite() || end <= time {
+                break;
+            }
+            if let Some(background) = source
+                .segment
+                .settings
+                .as_ref()
+                .and_then(|s| s.background.as_ref())
+            {
+                maps.styles.push(TimedCursorCropMap {
+                    start: time,
+                    end,
+                    crop: background
+                        .crop
+                        .as_ref()
+                        .and_then(|crop| CursorCropMap::from_crop(crop, screen_size)),
+                });
+            }
+            time = end;
         }
 
         let mut styles: Vec<_> = timeline
@@ -176,17 +208,17 @@ impl CursorCropMaps {
                 })
                 .then_with(|| left_index.cmp(right_index))
         });
-        maps.styles = styles
-            .into_iter()
-            .map(|(_, segment, background)| TimedCursorCropMap {
-                start: segment.start,
-                end: segment.end,
-                crop: background
-                    .crop
-                    .as_ref()
-                    .and_then(|crop| CursorCropMap::from_crop(crop, screen_size)),
-            })
-            .collect();
+        maps.styles
+            .extend(styles.into_iter().map(|(_, segment, background)| {
+                TimedCursorCropMap {
+                    start: segment.start,
+                    end: segment.end,
+                    crop: background
+                        .crop
+                        .as_ref()
+                        .and_then(|crop| CursorCropMap::from_crop(crop, screen_size)),
+                }
+            }));
         maps
     }
 }
@@ -1816,6 +1848,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             },
             TimelineSegment {
                 recording_clip: 0,
@@ -1827,6 +1860,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             },
         ];
         config.transitions = vec![ClipTransition {
@@ -2286,6 +2320,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             }];
             let cursor = CursorEvents {
                 moves: vec![
@@ -2663,6 +2698,7 @@ mod tests {
                 volume: None,
                 hide_cursor: None,
                 auto_zoom: None,
+                settings: None,
             });
         }
         project
@@ -2779,6 +2815,7 @@ mod tests {
                 hide_cursor: None,
                 auto_zoom: None,
                 volume: None,
+                settings: None,
             }],
             transitions: vec![],
             zoom_segments: vec![],
@@ -2841,6 +2878,7 @@ mod tests {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 },
                 TimelineSegment {
                     recording_clip: 0,
@@ -2852,6 +2890,7 @@ mod tests {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 },
             ],
             transitions: vec![ClipTransition {

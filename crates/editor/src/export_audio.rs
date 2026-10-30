@@ -1089,6 +1089,7 @@ mod tests {
             hide_cursor: None,
             auto_zoom: None,
             volume: None,
+            settings: None,
         }
     }
 

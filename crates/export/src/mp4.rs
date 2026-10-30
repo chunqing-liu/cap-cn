@@ -374,7 +374,22 @@ impl Mp4ExportSettings {
 
         let has_recording_audio = audio_segments
             .first()
-            .filter(|_| !base.project_config.audio.mute)
+            .filter(|_| {
+                !base.project_config.audio.mute
+                    || base
+                        .project_config
+                        .timeline
+                        .as_ref()
+                        .is_some_and(|timeline| {
+                            timeline.segments.iter().any(|segment| {
+                                segment
+                                    .settings
+                                    .as_ref()
+                                    .and_then(|settings| settings.audio.as_ref())
+                                    .is_some_and(|audio| !audio.mute)
+                            })
+                        })
+            })
             .is_some();
         let has_audio = has_recording_audio || !music.is_empty();
 

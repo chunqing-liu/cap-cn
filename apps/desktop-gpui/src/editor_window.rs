@@ -442,6 +442,7 @@ pub fn preflight(path: &std::path::Path) -> Result<ProjectSummary, String> {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 })
                 .collect(),
             // `TimelineConfiguration` has no `Default`, so the eight other
@@ -4108,6 +4109,7 @@ impl EditorWindow {
                 }
             });
             self.selection = selection;
+            self.sync_clip_control_state();
             self.refresh_image_asset_status();
             cx.notify();
         }
@@ -12291,6 +12293,7 @@ mod tests {
                     hide_cursor: None,
                     auto_zoom: None,
                     volume: None,
+                    settings: None,
                 }],
                 transitions: Vec::new(),
                 zoom_segments: Vec::new(),
@@ -12347,6 +12350,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                     cap_project::TimelineSegment {
                         recording_clip: 0,
@@ -12358,6 +12362,7 @@ mod tests {
                         hide_cursor: None,
                         auto_zoom: None,
                         volume: None,
+                        settings: None,
                     },
                 ],
                 transitions: Vec::new(),

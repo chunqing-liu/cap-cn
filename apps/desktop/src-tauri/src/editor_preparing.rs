@@ -1367,6 +1367,7 @@ mod presentation_guard_tests {
             speed_audio_mode: None,
             hide_cursor: None,
             volume: None,
+            settings: None,
         };
         for notch in [
             None,

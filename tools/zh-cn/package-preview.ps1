@@ -5,10 +5,10 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
-$version = '0.6.1-cn.2-dual-preview.3'
+$version = '0.6.1-cn.2-dual-preview.4'
 $tag = "v$version"
 $package = [IO.Path]::GetFullPath($PackageDirectory)
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'dist\preview-3' }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'dist\preview-4' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $release = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release.json') -Raw | ConvertFrom-Json
 if ((Get-Item -LiteralPath (Join-Path $package 'Cap.exe')).VersionInfo.ProductVersion -ne $release.version) {
@@ -42,8 +42,8 @@ if ($LASTEXITCODE -ne 0) { throw '导出源码补丁失败。' }
 $release | Add-Member -NotePropertyName previewTag -NotePropertyValue $tag
 $release | Add-Member -NotePropertyName sourceCommit -NotePropertyValue $commit
 $release | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $app 'release.json') -Encoding utf8
-$notes = "Cap 中文双屏编辑增强预览版 3`r`n发行标签：$tag`r`n源码提交：$commit`r`n完整源码改动.patch 相对 v0.6.1-cn.2 稳定版。`r`n`r`n" +
-    [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'releases\dual-preview-3.md'))
+$notes = "Cap 中文双屏编辑增强预览版 4`r`n发行标签：$tag`r`n源码提交：$commit`r`n完整源码改动.patch 相对 v0.6.1-cn.2 稳定版。`r`n`r`n" +
+    [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'releases\dual-preview-4.md'))
 [IO.File]::WriteAllText((Join-Path $app '使用说明.txt'), $notes, [Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText((Join-Path $output 'README.txt'), $notes, [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'installer\安装与迁移说明.txt') -Destination $stage

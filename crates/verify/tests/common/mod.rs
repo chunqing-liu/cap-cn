@@ -100,6 +100,7 @@ pub fn set_cuts(config: &mut ProjectConfiguration, cuts: &[(f64, f64, f64)]) {
             hide_cursor: None,
             auto_zoom: None,
             volume: None,
+            settings: None,
         })
         .collect();
 }
@@ -119,6 +120,7 @@ pub fn set_clip_cuts(config: &mut ProjectConfiguration, cuts: &[(u32, f64, f64, 
             hide_cursor: None,
             auto_zoom: None,
             volume: None,
+            settings: None,
         })
         .collect();
 }
